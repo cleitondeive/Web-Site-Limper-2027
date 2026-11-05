@@ -1,0 +1,6 @@
+{
+  "name": "Limper MT - Catálogo & Delivery de Produtos de Limpeza",
+  "description": "Plataforma de e-commerce e catálogo delivery da Limper MT para produtos de limpeza profissional, automotiva, lavanderia e doméstica em Cuiabá e Várzea Grande, com recompra rápida e pedido integrado via WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
