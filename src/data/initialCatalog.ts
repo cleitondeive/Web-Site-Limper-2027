@@ -1,15 +1,18 @@
 import { Category, Order, Product, PromoKit, StoreSettings } from '../types/commerce';
+import bannerAutomotivoImg from '../assets/images/banner_automotivo_1793895269182.jpg';
+import prodLavanderiaImg from '../assets/images/prod_lavanderia_1793895269711.jpg';
+import prodLimpezaPesadaImg from '../assets/images/prod_limpeza_pesada_1793895270799.jpg';
 
 export const LIMPER_LOGO_URL =
   '/assets/aistudio/Captura_de_Tela_2026-11-05_a_s_13.29.37_c656bc53.png';
 
 // Exclusivamente embalagens plásticas industriais e galões de 5L / 2L de produtos de limpeza (sem frascos âmbar de cosméticos)
 export const GENERATED_IMAGES = {
-  heroCleaning: '/src/assets/images/prod_lavanderia_1793895269711.jpg',
-  bannerAutomotivo: '/src/assets/images/banner_automotivo_1793895269182.jpg',
-  prodCasa: '/src/assets/images/prod_limpeza_pesada_1793895270799.jpg',
-  prodLavanderia: '/src/assets/images/prod_lavanderia_1793895269711.jpg',
-  prodLimpezaPesada: '/src/assets/images/prod_limpeza_pesada_1793895270799.jpg',
+  heroCleaning: prodLavanderiaImg,
+  bannerAutomotivo: bannerAutomotivoImg,
+  prodCasa: prodLimpezaPesadaImg,
+  prodLavanderia: prodLavanderiaImg,
+  prodLimpezaPesada: prodLimpezaPesadaImg,
 };
 
 export const INITIAL_CATEGORIES: Category[] = [
