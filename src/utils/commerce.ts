@@ -6,6 +6,7 @@ import {
   OrderStatus,
   PaymentMethod,
   Product,
+  PromoCoupon,
   StoreSettings,
   VolumeFilterOption,
 } from '../types/commerce';
@@ -63,7 +64,7 @@ export function getPricePerLiterLabel(product: Product): string | null {
   if (effective <= 0) return null;
   const primaryVol = product.volumeLabel.split('|')[0].trim();
   const matchLiters = primaryVol.match(/^(\d+(?:[.,]\d+)?)\s*L$/i);
-  if (matchLiters) {
+  if (litersMatchValid(matchLiters)) {
     const liters = parseFloat(matchLiters[1].replace(',', '.'));
     if (liters > 1) {
       const perLiter = effective / liters;
@@ -73,6 +74,10 @@ export function getPricePerLiterLabel(product: Product): string | null {
   return null;
 }
 
+function litersMatchValid(match: RegExpMatchArray | null): match is RegExpMatchArray {
+  return Boolean(match && match[1]);
+}
+
 export interface CouponEvaluation {
   valid: boolean;
   code: string;
@@ -80,10 +85,55 @@ export interface CouponEvaluation {
   label: string;
 }
 
-export function evaluateCoupon(rawCode: string, subtotal: number): CouponEvaluation {
+export function evaluateCoupon(
+  rawCode: string,
+  subtotal: number,
+  customCoupons?: PromoCoupon[]
+): CouponEvaluation {
   const code = (rawCode || '').trim().toUpperCase();
   if (!code || subtotal <= 0) {
     return { valid: false, code: '', discountAmount: 0, label: '' };
+  }
+
+  // If customCoupons from Admin are provided, check them first
+  if (customCoupons && customCoupons.length > 0) {
+    const matched = customCoupons.find(
+      (c) => c.code.trim().toUpperCase() === code && c.active
+    );
+    if (matched) {
+      const minOrder = matched.minOrderValue || 0;
+      if (minOrder > 0 && subtotal < minOrder) {
+        return {
+          valid: false,
+          code: matched.code.toUpperCase(),
+          discountAmount: 0,
+          label: `Adicione mais ${formatCurrency(minOrder - subtotal)} para liberar o cupom ${matched.code.toUpperCase()} (${matched.description}).`,
+        };
+      }
+      const rawDiscount =
+        matched.discountType === 'percent'
+          ? Math.round(subtotal * (matched.discountValue / 100) * 100) / 100
+          : matched.discountValue;
+      const discount = Math.min(subtotal, Math.max(0, rawDiscount));
+      return {
+        valid: true,
+        code: matched.code.toUpperCase(),
+        discountAmount: discount,
+        label: `${matched.description} aplicado!`,
+      };
+    }
+
+    const inactiveMatch = customCoupons.find(
+      (c) => c.code.trim().toUpperCase() === code && !c.active
+    );
+    if (inactiveMatch) {
+      return {
+        valid: false,
+        code,
+        discountAmount: 0,
+        label: `O cupom ${code} está temporariamente inativo.`,
+      };
+    }
   }
 
   if (code === 'LIMPER10') {
@@ -123,11 +173,19 @@ export function evaluateCoupon(rawCode: string, subtotal: number): CouponEvaluat
     };
   }
 
+  const availableCodes =
+    customCoupons && customCoupons.filter((c) => c.active).length > 0
+      ? customCoupons
+          .filter((c) => c.active)
+          .map((c) => c.code.toUpperCase())
+          .join(', ')
+      : 'LIMPER10, BEMVINDO ou ATACADO5L';
+
   return {
     valid: false,
     code,
     discountAmount: 0,
-    label: 'Cupom inválido. Experimente LIMPER10, BEMVINDO ou ATACADO5L.',
+    label: `Cupom inválido. Experimente: ${availableCodes}.`,
   };
 }
 
@@ -199,7 +257,8 @@ export function calculateCartTotals(
   deliveryType: DeliveryType,
   neighborhoodName: string,
   settings: StoreSettings,
-  couponCode?: string
+  couponCode?: string,
+  customCoupons?: PromoCoupon[]
 ): {
   itemCount: number;
   subtotal: number;
@@ -235,11 +294,12 @@ export function calculateCartTotals(
   subtotal = Math.round(subtotal * 100) / 100;
   savings = Math.round(savings * 100) / 100;
 
-  const couponEval = evaluateCoupon(couponCode || '', subtotal);
+  const couponEval = evaluateCoupon(couponCode || '', subtotal, customCoupons);
   const couponDiscount = couponEval.valid ? couponEval.discountAmount : 0;
 
   const deliveryFee = calculateDeliveryFee(subtotal, deliveryType, neighborhoodName, settings);
   const total = Math.max(0, Math.round((subtotal - couponDiscount + deliveryFee) * 100) / 100);
+
   const freeShippingRemaining =
     settings.freeShippingThreshold > 0
       ? Math.max(0, Math.round((settings.freeShippingThreshold - subtotal) * 100) / 100)

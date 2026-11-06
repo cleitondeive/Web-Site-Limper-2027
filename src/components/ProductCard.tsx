@@ -46,7 +46,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     <article className="group bg-white rounded-2xl border border-zinc-200/90 hover:border-[#FFBE00] overflow-hidden flex flex-col justify-between transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
       <div>
         {/* Product Image Container (Todimo + Drogasil style) */}
-        <div className="relative aspect-square bg-white p-3 overflow-hidden border-b border-zinc-100">
+        <div className="relative aspect-square bg-white p-2 sm:p-3 overflow-hidden border-b border-zinc-100">
           <button
             type="button"
             onClick={() => onOpenDetail(product)}
@@ -63,14 +63,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
           {/* Top-Left Circular Yellow Discount Badge (Todimo style: "22% OFF") */}
           {priceVisible && discountPct > 0 && !isOutOfStock && (
-            <div className="absolute top-3 left-3 w-11 h-11 rounded-full bg-[#E5B800] text-zinc-950 font-mono font-extrabold text-[11px] leading-none flex flex-col items-center justify-center shadow-xs border border-white">
+            <div className="absolute top-2 left-2 sm:top-3 sm:left-3 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-[#E5B800] text-zinc-950 font-mono font-extrabold text-[10px] sm:text-[11px] leading-none flex flex-col items-center justify-center shadow-xs border border-white">
               <span>{discountPct}%</span>
-              <span className="text-[9px] font-black tracking-tight mt-0.5">OFF</span>
+              <span className="text-[8px] sm:text-[9px] font-black tracking-tight mt-0.5">OFF</span>
             </div>
           )}
 
           {/* Top-Right Favorite Heart & Quick-View Buttons */}
-          <div className="absolute top-3 right-3 flex flex-col gap-1.5">
+          <div className="absolute top-2 right-2 sm:top-3 sm:right-3 flex flex-col gap-1 sm:gap-1.5">
             {onToggleFavorite && (
               <button
                 type="button"
@@ -83,116 +83,121 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                     ? `Remover ${product.title} dos favoritos`
                     : `Salvar ${product.title} nos favoritos`
                 }
-                className={`w-8 h-8 rounded-full border flex items-center justify-center transition-colors shadow-2xs cursor-pointer ${
+                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border flex items-center justify-center transition-colors shadow-2xs cursor-pointer ${
                   isFavorite
                     ? 'bg-rose-50 border-[#E3262E] text-[#E3262E]'
                     : 'bg-white/95 hover:bg-zinc-100 border-zinc-200 text-zinc-500 hover:text-[#E3262E]'
                 }`}
               >
-                <Heart className={`w-4 h-4 ${isFavorite ? 'fill-[#E3262E]' : ''}`} />
+                <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isFavorite ? 'fill-[#E3262E]' : ''}`} />
               </button>
             )}
             <button
               type="button"
               onClick={() => onOpenDetail(product)}
               aria-label={`Inspecionar ${product.title}`}
-              className="w-8 h-8 rounded-full bg-white/95 hover:bg-[#FFBE00] text-zinc-600 hover:text-zinc-950 border border-zinc-200 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
+              className="hidden sm:flex w-8 h-8 rounded-full bg-white/95 hover:bg-[#FFBE00] text-zinc-600 hover:text-zinc-950 border border-zinc-200 items-center justify-center transition-colors shadow-2xs cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5" />
             </button>
           </div>
 
           {/* Volume / Options Pill at bottom of image (Drogasil "2 opções" style) */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
-            <span className="px-2.5 py-0.5 rounded-full bg-white/95 border border-zinc-300 text-[10px] font-mono font-bold text-zinc-700 shadow-2xs whitespace-nowrap">
+          <div className="absolute bottom-2.5 sm:bottom-4 left-1/2 -translate-x-1/2 max-w-[92%]">
+            <span className="block truncate px-2 sm:px-2.5 py-0.5 rounded-full bg-white/95 border border-zinc-300 text-[9px] sm:text-[10px] font-mono font-bold text-zinc-700 shadow-2xs whitespace-nowrap">
               {product.volumeLabel.includes('|') ? '2 opções · ' : 'Emb. '}
               {product.volumeLabel}
             </span>
           </div>
 
           {isOutOfStock && (
-            <div className="absolute inset-0 bg-white/85 backdrop-blur-2xs flex items-center justify-center">
-              <span className="text-xs font-mono uppercase tracking-wider text-zinc-800 font-bold border border-zinc-300 bg-white px-3 py-1.5 rounded-lg">
-                Esgotado Temporariamente
+            <div className="absolute inset-0 bg-white/85 backdrop-blur-2xs flex items-center justify-center p-2 text-center">
+              <span className="text-[10px] sm:text-xs font-mono uppercase tracking-wider text-zinc-800 font-bold border border-zinc-300 bg-white px-2.5 py-1.5 rounded-lg">
+                Esgotado
               </span>
             </div>
           )}
         </div>
 
         {/* Promotional Highlight Badges & Title (Todimo + Drogasil Hybrid) */}
-        <div className="p-3.5 pb-2 space-y-2">
+        <div className="p-2.5 sm:p-3.5 pb-1.5 sm:pb-2 space-y-1.5 sm:space-y-2">
           {/* Badges Stack */}
           <div className="space-y-1">
             {discountPct > 0 ? (
               <>
-                <div className="inline-block px-2 py-0.5 rounded-md bg-[#2B2E34] text-white text-[10px] font-extrabold tracking-tight">
+                <div className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-[#2B2E34] text-white text-[10px] font-extrabold tracking-tight">
                   Oferta do Dia
                 </div>
-                <div className="w-full py-1 px-2 rounded-md bg-[#E5B800] text-zinc-950 text-[10px] font-extrabold text-center truncate">
+                <div className="w-full py-0.5 sm:py-1 px-1.5 sm:px-2 rounded-md bg-[#E5B800] text-zinc-950 text-[9px] sm:text-[10px] font-extrabold text-center truncate">
                   {product.badgeLabel || 'Ofertas do Mês | Limper MT'}
                 </div>
               </>
             ) : (
-              <div className="w-full py-1 px-2 rounded-md bg-[#FFF3C4] border border-[#FDE68A] text-zinc-900 text-[10px] font-extrabold text-center truncate">
-                {product.subBadgeLabel || `Preço Exclusivo Site | ${category?.shortName || 'Quimiprol'}`}
+              <div className="w-full py-0.5 sm:py-1 px-1.5 sm:px-2 rounded-md bg-[#FFF3C4] border border-[#FDE68A] text-zinc-900 text-[9px] sm:text-[10px] font-extrabold text-center truncate">
+                {product.subBadgeLabel || `Exclusivo | ${category?.shortName || 'Quimiprol'}`}
               </div>
             )}
           </div>
 
           {/* Product Title + SKU Reference (Todimo style) */}
-          <h3 className="font-sans text-xs sm:text-[13px] font-semibold text-zinc-800 leading-snug line-clamp-2 min-h-[2.3rem]">
+          <h3 className="font-sans text-[11px] sm:text-[13px] font-semibold text-zinc-800 leading-snug line-clamp-2 min-h-[2rem] sm:min-h-[2.3rem]">
             <button
               type="button"
               onClick={() => onOpenDetail(product)}
               className="text-left hover:text-[#E3262E] transition-colors cursor-pointer"
             >
               {product.title}{' '}
-              <span className="text-zinc-400 font-normal">— Ref. {product.sku}</span>
+              <span className="text-zinc-400 font-normal hidden sm:inline">
+                — Ref. {product.sku}
+              </span>
             </button>
           </h3>
 
           {product.dilutionHint && (
-            <p className="text-[11px] text-zinc-500 truncate">
-              Rendimento: <span className="font-semibold text-zinc-700">{product.dilutionHint}</span>
+            <p className="text-[10px] sm:text-[11px] text-zinc-500 truncate">
+              <span className="hidden sm:inline">Rendimento: </span>
+              <span className="font-semibold text-zinc-700">{product.dilutionHint}</span>
             </p>
           )}
         </div>
       </div>
 
       {/* Pricing, Installments, CEP Notice & Add Button */}
-      <div className="p-3.5 pt-1 flex flex-col justify-end gap-2.5">
+      <div className="p-2.5 sm:p-3.5 pt-1 flex flex-col justify-end gap-2">
         {priceVisible ? (
           <div>
             {discountPct > 0 ? (
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-mono text-zinc-400 line-through tabular-nums">
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <span className="text-[10px] sm:text-[11px] font-mono text-zinc-400 line-through tabular-nums">
                   {formatCurrency(product.price)}
                 </span>
-                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-mono text-[10px] font-extrabold">
+                <span className="inline-flex items-center gap-0.5 px-1 sm:px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-mono text-[9px] sm:text-[10px] font-extrabold">
                   <ArrowDown className="w-2.5 h-2.5 stroke-[3]" />
                   {discountPct}%
                 </span>
               </div>
             ) : (
-              <div className="text-[11px] text-zinc-400">Preço exclusivo online</div>
+              <div className="text-[10px] sm:text-[11px] text-zinc-400 truncate">
+                Preço exclusivo online
+              </div>
             )}
 
             <div className="flex items-baseline justify-between gap-1 mt-0.5">
-              <div className="text-lg sm:text-xl font-mono font-extrabold text-zinc-950 tabular-nums leading-tight">
+              <div className="text-base sm:text-xl font-mono font-extrabold text-zinc-950 tabular-nums leading-tight">
                 {formatCurrency(effectivePrice)}
               </div>
               {pricePerLiter && (
-                <span className="px-1.5 py-0.5 rounded-md bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309] font-mono text-[10px] font-bold shrink-0">
+                <span className="px-1 sm:px-1.5 py-0.5 rounded-md bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309] font-mono text-[9px] sm:text-[10px] font-bold shrink-0">
                   {pricePerLiter}
                 </span>
               )}
             </div>
 
-            <div className="text-[11px] text-zinc-500 mt-0.5">
-              ou <strong className="text-zinc-700">3x de {formatCurrency(installmentValue)}</strong> sem juros
+            <div className="text-[10px] sm:text-[11px] text-zinc-500 mt-0.5 truncate">
+              ou <strong className="text-zinc-700">3x {formatCurrency(installmentValue)}</strong> s/ juros
             </div>
 
-            <div className="text-[10px] text-zinc-400 mt-1 truncate">
+            <div className="hidden sm:block text-[10px] text-zinc-400 mt-1 truncate">
               {customerCep
                 ? `Disponível p/ CEP ${customerCep} (15min)`
                 : 'Retirada 15min Av. Couto Magalhães'}
@@ -200,14 +205,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
         ) : (
           <div className="py-1">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-[#E3262E] font-bold">
-              Atacado & Varejo Quimiprol
+            <div className="text-[9px] sm:text-[10px] font-mono uppercase tracking-wider text-[#E3262E] font-bold truncate">
+              Atacado & Varejo
             </div>
-            <div className="text-sm font-display font-extrabold text-zinc-900">
-              Valor sob consulta
+            <div className="text-xs sm:text-sm font-display font-extrabold text-zinc-900">
+              Sob consulta
             </div>
-            <div className="text-[10px] text-zinc-400 mt-0.5">
-              Cotação imediata via WhatsApp
+            <div className="text-[10px] text-zinc-400 mt-0.5 truncate">
+              Cotação no WhatsApp
             </div>
           </div>
         )}
@@ -216,7 +221,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <button
             type="button"
             disabled
-            className="w-full py-2 bg-zinc-100 text-zinc-400 text-xs font-semibold rounded-xl cursor-not-allowed"
+            className="w-full py-2 bg-zinc-100 text-zinc-400 text-[11px] sm:text-xs font-semibold rounded-xl cursor-not-allowed"
           >
             Indisponível
           </button>
@@ -230,8 +235,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <span className="font-mono text-xs font-extrabold px-1.5 tabular-nums">
-              {quantityInCart} na cesta
+            <span className="font-mono text-[11px] sm:text-xs font-extrabold px-1 tabular-nums">
+              {quantityInCart} <span className="hidden sm:inline">na cesta</span>
             </span>
             <button
               type="button"
@@ -247,10 +252,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             type="button"
             onClick={() => onAdd(product)}
             aria-label={`Adicionar ${product.title} ao carrinho`}
-            className="w-full py-2.5 px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer shadow-2xs"
+            className="w-full py-2 sm:py-2.5 px-2 sm:px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-[11px] sm:text-xs rounded-xl flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer shadow-2xs"
           >
-            <ShoppingCart className="w-3.5 h-3.5 stroke-[2.2]" />
-            <span>{priceVisible ? 'Adicionar à Cesta' : 'Cotar no Pedido'}</span>
+            <ShoppingCart className="w-3.5 h-3.5 stroke-[2.2] shrink-0" />
+            <span className="sm:hidden">{priceVisible ? 'Adicionar' : 'Cotar'}</span>
+            <span className="hidden sm:inline">
+              {priceVisible ? 'Adicionar à Cesta' : 'Cotar no Pedido'}
+            </span>
           </button>
         )}
       </div>

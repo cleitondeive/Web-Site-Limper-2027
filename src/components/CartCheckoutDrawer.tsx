@@ -23,6 +23,7 @@ import {
   Order,
   PaymentMethod,
   Product,
+  PromoCoupon,
   StoreSettings,
 } from '../types/commerce';
 import {
@@ -43,6 +44,8 @@ interface CartCheckoutDrawerProps {
   isOpen: boolean;
   cart: CartItem[];
   catalogProducts?: Product[];
+  coupons?: PromoCoupon[];
+  initialCouponCode?: string;
   settings: StoreSettings;
   customerProfile: CustomerProfile;
   existingOrders: Order[];
@@ -58,6 +61,8 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
   isOpen,
   cart,
   catalogProducts = [],
+  coupons = [],
+  initialCouponCode = '',
   settings,
   customerProfile,
   existingOrders,
@@ -85,10 +90,17 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
   const [cardSubType, setCardSubType] = useState<'credit' | 'debit'>('credit');
   const [cashChangeFor, setCashChangeFor] = useState('');
   const [notes, setNotes] = useState('');
-  const [couponInput, setCouponInput] = useState('');
-  const [appliedCoupon, setAppliedCoupon] = useState('');
+  const [couponInput, setCouponInput] = useState(initialCouponCode || '');
+  const [appliedCoupon, setAppliedCoupon] = useState(initialCouponCode || '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedPix, setCopiedPix] = useState(false);
+
+  React.useEffect(() => {
+    if (initialCouponCode) {
+      setCouponInput(initialCouponCode);
+      setAppliedCoupon(initialCouponCode);
+    }
+  }, [initialCouponCode]);
 
   if (!isOpen) return null;
 
@@ -97,7 +109,8 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
     deliveryType,
     neighborhood,
     settings,
-    appliedCoupon
+    appliedCoupon,
+    coupons
   );
   const pixPayload = buildPixPayload(
     settings.pixKey,
@@ -415,11 +428,26 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {[
-                    { code: 'LIMPER10', desc: '10% OFF' },
-                    { code: 'BEMVINDO', desc: '5% OFF' },
-                    { code: 'ATACADO5L', desc: '-R$ 15 (>R$ 120)' },
-                  ].map((c) => (
+                  {(coupons.filter((c) => c.active).length > 0
+                    ? coupons
+                        .filter((c) => c.active)
+                        .map((c) => ({
+                          code: c.code.toUpperCase(),
+                          desc:
+                            c.discountType === 'percent'
+                              ? `${c.discountValue}% OFF`
+                              : `-${formatCurrency(c.discountValue)}${
+                                  c.minOrderValue && c.minOrderValue > 0
+                                    ? ` (>R$ ${c.minOrderValue})`
+                                    : ''
+                                }`,
+                        }))
+                    : [
+                        { code: 'LIMPER10', desc: '10% OFF' },
+                        { code: 'BEMVINDO', desc: '5% OFF' },
+                        { code: 'ATACADO5L', desc: '-R$ 15 (>R$ 120)' },
+                      ]
+                  ).map((c) => (
                     <button
                       key={c.code}
                       type="button"

@@ -41,7 +41,7 @@ test('getPricePerLiterLabel computes economy per liter for multi-liter gallons',
   assert.equal(getPricePerLiterLabel(gallonProduct), 'R$ 9,00/L');
 });
 
-test('evaluateCoupon and calculateCartTotals apply promotional coupon codes accurately', () => {
+test('evaluateCoupon and calculateCartTotals apply promotional coupon codes and custom Admin coupons accurately', () => {
   const eval10 = evaluateCoupon('limper10', 100);
   assert.equal(eval10.valid, true);
   assert.equal(eval10.discountAmount, 10);
@@ -52,6 +52,21 @@ test('evaluateCoupon and calculateCartTotals apply promotional coupon codes accu
   const evalAtacadoOk = evaluateCoupon('ATACADO5L', 150);
   assert.equal(evalAtacadoOk.valid, true);
   assert.equal(evalAtacadoOk.discountAmount, 15);
+
+  const customAdminCoupons = [
+    {
+      id: 'cp-1',
+      code: 'QUIMI20',
+      description: '20% OFF Especial Quimiprol',
+      discountType: 'percent' as const,
+      discountValue: 20,
+      minOrderValue: 100,
+      active: true,
+    },
+  ];
+  const evalCustomOk = evaluateCoupon('quimi20', 200, customAdminCoupons);
+  assert.equal(evalCustomOk.valid, true);
+  assert.equal(evalCustomOk.discountAmount, 40);
 });
 
 test('isProductPriceVisible respects individual product showPrice and global hideAllPrices', () => {

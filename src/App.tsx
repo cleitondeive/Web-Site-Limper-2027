@@ -31,6 +31,8 @@ import {
   CustomerProfile,
   Order,
   Product,
+  PromoBanner,
+  PromoCoupon,
   PromoKit,
   StoreSettings,
   VolumeFilterOption,
@@ -74,6 +76,12 @@ export default function App() {
   const [kits, setKits] = useState<PromoKit[]>(() =>
     storageService.getKits()
   );
+  const [coupons, setCoupons] = useState<PromoCoupon[]>(() =>
+    storageService.getCoupons()
+  );
+  const [banners, setBanners] = useState<PromoBanner[]>(() =>
+    storageService.getBanners()
+  );
   const [orders, setOrders] = useState<Order[]>(() =>
     storageService.getOrders()
   );
@@ -89,6 +97,7 @@ export default function App() {
   const [favorites, setFavorites] = useState<string[]>(() =>
     storageService.getFavorites()
   );
+  const [activeCouponCode, setActiveCouponCode] = useState<string>('');
 
   // Navigation & Filter States
   const [activeView, setActiveView] = useState<ActiveView>('store');
@@ -134,6 +143,16 @@ export default function App() {
   const handleSaveKits = (updated: PromoKit[]) => {
     setKits(updated);
     storageService.saveKits(updated);
+  };
+
+  const handleSaveCoupons = (updated: PromoCoupon[]) => {
+    setCoupons(updated);
+    storageService.saveCoupons(updated);
+  };
+
+  const handleSaveBanners = (updated: PromoBanner[]) => {
+    setBanners(updated);
+    storageService.saveBanners(updated);
   };
 
   const handleSaveOrders = (updated: Order[]) => {
@@ -230,12 +249,17 @@ export default function App() {
 
   // Active Promo Kits managed in Admin ("Kits Prontos de Limpeza com Imagem")
   const activeKits = kits.filter((k) => k.active);
+  const activeBottomBanner = banners.find(
+    (b) => b.slot === 'bottom_banner' && b.active
+  );
 
   const cartTotals = calculateCartTotals(
     cart,
     'delivery',
     customerProfile.neighborhood || 'Centro Norte',
-    settings
+    settings,
+    activeCouponCode,
+    coupons
   );
 
   const selectedCategoryObj = categories.find((c) => c.id === selectedCategoryId);
@@ -353,6 +377,10 @@ export default function App() {
           <>
             {/* Section 1: Light Smart Solutions Bar + Auto-Rotating Promotional Banner Carousel */}
             <HeroCarousel
+              banners={banners}
+              products={products}
+              coupons={coupons}
+              hideAllPrices={settings.hideAllPrices}
               selectedCategoryId={selectedCategoryId}
               onlyFavorites={onlyFavorites}
               favoritesCount={favorites.length}
@@ -373,23 +401,29 @@ export default function App() {
               onOpenRepeatOrders={() => setActiveView('orders')}
               onOpenQuickOrderModal={() => setIsQuickOrderModalOpen(true)}
               onOpenCepModal={() => setIsCepModalOpen(true)}
+              onSelectProduct={(prod) => setDetailProduct(prod)}
+              onAddToCart={handleAddToCart}
+              onApplyCoupon={(code) => {
+                setActiveCouponCode(code);
+                showToast(`Cupom ${code} ativado na sua Cesta!`);
+              }}
               latestActiveOrder={latestActiveOrder}
             />
 
             {/* Section 2: Todimo 5-Product Horizontal Showcase ("Ofertas Imbatíveis da Semana") */}
             {!selectedCategoryId && !searchQuery && !onlyFavorites && (
-              <section className="max-w-[1360px] mx-auto px-4 sm:px-6 pt-4 pb-2">
-                <div className="flex items-center justify-between gap-4 mb-4">
+              <section className="max-w-[1360px] mx-auto px-3 sm:px-6 pt-3 sm:pt-4 pb-2">
+                <div className="flex items-center justify-between gap-3 sm:gap-4 mb-3 sm:mb-4">
                   <div>
-                    <div className="inline-flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider font-extrabold text-[#E3262E]">
+                    <div className="inline-flex items-center gap-2 text-[10px] sm:text-[11px] font-mono uppercase tracking-wider font-extrabold text-[#E3262E]">
                       <span>VITRINE DE DESTAQUES · 5 PRODUTOS POR LINHA</span>
                     </div>
-                    <h2 className="font-display text-xl sm:text-2xl font-extrabold text-zinc-900">
+                    <h2 className="font-display text-lg sm:text-2xl font-extrabold text-zinc-900">
                       Ofertas Imbatíveis da Semana Limper MT
                     </h2>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() =>
@@ -398,7 +432,7 @@ export default function App() {
                         )
                       }
                       aria-label="Produtos anteriores da vitrine"
-                      className="w-9 h-9 rounded-full bg-white hover:bg-[#FFBE00] border border-zinc-300 text-zinc-800 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
+                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white hover:bg-[#FFBE00] border border-zinc-300 text-zinc-800 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
@@ -406,15 +440,15 @@ export default function App() {
                       type="button"
                       onClick={() => setShowcasePage((prev) => prev + 1)}
                       aria-label="Próximos produtos da vitrine"
-                      className="w-9 h-9 rounded-full bg-white hover:bg-[#FFBE00] border border-zinc-300 text-zinc-800 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
+                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white hover:bg-[#FFBE00] border border-zinc-300 text-zinc-800 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
 
-                {/* 5-Column Product Showcase Row (Todimo pattern) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                {/* 2-Column on Mobile / 5-Column on Desktop Product Showcase Row (Todimo pattern) */}
+                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4">
                   {visibleShowcaseFive.map((product) => {
                     const cartEntry = cart.find((c) => c.product.id === product.id);
                     const catObj = categories.find((c) => c.id === product.categoryId);
@@ -454,19 +488,19 @@ export default function App() {
               totalFilteredCount={filteredProducts.length}
             />
 
-            <section className="max-w-[1360px] mx-auto px-4 sm:px-6 py-6">
+            <section className="max-w-[1360px] mx-auto px-3 sm:px-6 py-4 sm:py-6">
               {/* Active Filter Context Header + Retail Catalog Toolbar (Sorting & Volume Filters) */}
-              <div className="bg-white rounded-2xl border border-zinc-200/90 p-4 mb-5 shadow-2xs space-y-3">
+              <div className="bg-white rounded-2xl border border-zinc-200/90 p-3.5 sm:p-4 mb-4 sm:mb-5 shadow-2xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h2 className="font-display text-xl sm:text-2xl font-extrabold text-zinc-900">
+                    <h2 className="font-display text-lg sm:text-2xl font-extrabold text-zinc-900">
                       {onlyFavorites
                         ? `Meus Produtos Salvos (${filteredProducts.length})`
                         : selectedCategoryObj
                         ? selectedCategoryObj.name
                         : onlyOffers
                         ? 'Ofertas Especiais Quimiprol & Limper MT'
-                        : 'Catálogo Completo Limper MT (5 Colunas)'}
+                        : 'Catálogo Completo Limper MT'}
                     </h2>
                     {selectedCategoryObj && (
                       <p className="text-xs sm:text-sm text-zinc-500 mt-0.5">
@@ -488,20 +522,20 @@ export default function App() {
                       }}
                       className="text-xs font-extrabold text-[#E3262E] hover:underline cursor-pointer"
                     >
-                      Limpar filtros e ver todos ({products.filter((p) => p.status !== 'inactive').length})
+                      Limpar filtros ({products.filter((p) => p.status !== 'inactive').length})
                     </button>
                   )}
                 </div>
 
                 {/* Interactive Volume Filter Pills & Sort Dropdown */}
-                <div className="pt-3 border-t border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="inline-flex items-center gap-1 text-xs font-bold text-zinc-600 mr-1">
+                <div className="pt-2.5 sm:pt-3 border-t border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+                  <div className="flex sm:flex-wrap items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 sm:pb-0">
+                    <span className="inline-flex items-center gap-1 text-[11px] sm:text-xs font-bold text-zinc-600 mr-0.5 shrink-0">
                       <Filter className="w-3.5 h-3.5 text-[#E3262E]" />
                       <span>Embalagem:</span>
                     </span>
                     {[
-                      { id: 'all' as VolumeFilterOption, label: 'Todas Embalagens' },
+                      { id: 'all' as VolumeFilterOption, label: 'Todas' },
                       { id: '5L' as VolumeFilterOption, label: 'Galões 5L / 3,5L (Atacado)' },
                       { id: '2L_1L' as VolumeFilterOption, label: 'Frascos 2L e 1L' },
                       { id: 'small' as VolumeFilterOption, label: 'Pronto Uso (500mL / 60mL)' },
@@ -510,7 +544,7 @@ export default function App() {
                         key={vf.id}
                         type="button"
                         onClick={() => setVolumeFilter(vf.id)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                        className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                           volumeFilter === vf.id
                             ? 'bg-[#FFBE00] border-[#F59E0B] text-zinc-950 font-extrabold shadow-2xs'
                             : 'bg-[#FAFAFA] hover:bg-zinc-100 border-zinc-200 text-zinc-700'
@@ -523,14 +557,14 @@ export default function App() {
 
                   <div className="flex items-center gap-2 self-start sm:self-auto">
                     <ArrowUpDown className="w-3.5 h-3.5 text-[#D97706] shrink-0" />
-                    <label htmlFor="catalog-sort" className="text-xs font-bold text-zinc-600 shrink-0">
-                      Ordenar por:
+                    <label htmlFor="catalog-sort" className="text-[11px] sm:text-xs font-bold text-zinc-600 shrink-0">
+                      Ordenar:
                     </label>
                     <select
                       id="catalog-sort"
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as CatalogSortOption)}
-                      className="px-3 py-1.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-extrabold text-zinc-900 focus:border-[#FFBE00] focus:outline-none cursor-pointer"
+                      className="px-2.5 sm:px-3 py-1.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-[11px] sm:text-xs font-extrabold text-zinc-900 focus:border-[#FFBE00] focus:outline-none cursor-pointer"
                     >
                       <option value="featured">Destaques da Loja ★</option>
                       <option value="price_asc">Menor Preço (R$)</option>
@@ -542,9 +576,9 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 5-Column Product Grid */}
+              {/* 2-Column Mobile / 5-Column Desktop Product Grid */}
               {filteredProducts.length === 0 ? (
-                <div className="bg-white rounded-2xl border border-zinc-200 p-12 text-center max-w-md mx-auto">
+                <div className="bg-white rounded-2xl border border-zinc-200 p-10 sm:p-12 text-center max-w-md mx-auto">
                   <h3 className="font-display text-lg font-extrabold text-zinc-900 mb-1">
                     Nenhum produto encontrado
                   </h3>
@@ -569,7 +603,7 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4">
                   {filteredProducts.map((product) => {
                     const cartEntry = cart.find((c) => c.product.id === product.id);
                     const catObj = categories.find((c) => c.id === product.categoryId);
@@ -763,26 +797,47 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Bottom Promotional Banner ("Mais Banner na Parte de Baixo") */}
+              {/* Bottom Promotional Banner ("Mais Banner na Parte de Baixo" - Managed dynamically via Admin) */}
               <div className="rounded-3xl overflow-hidden border border-zinc-200 shadow-sm bg-gradient-to-r from-[#141416] via-[#1F2024] to-[#2B2E34] text-white grid grid-cols-1 lg:grid-cols-12 items-center">
                 <div className="lg:col-span-7 p-6 sm:p-10 space-y-4">
                   <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-[#FFBE00] text-zinc-950 text-xs font-extrabold uppercase tracking-wider">
-                    AV. COUTO MAGALHÃES, 2820 · VÁRZEA GRANDE - MT
+                    {activeBottomBanner
+                      ? activeBottomBanner.badge
+                      : 'AV. COUTO MAGALHÃES, 2820 · VÁRZEA GRANDE - MT'}
                   </div>
                   <h2 className="font-display text-2xl sm:text-4xl font-black tracking-tight leading-tight">
-                    Abasteça Condomínio, Clínica, Lava-Jato ou Residência com{' '}
-                    <span className="text-[#FFBE00]">Galões de 5L Quimiprol</span>
+                    {activeBottomBanner ? (
+                      activeBottomBanner.title
+                    ) : (
+                      <>
+                        Abasteça Condomínio, Clínica, Lava-Jato ou Residência com{' '}
+                        <span className="text-[#FFBE00]">Galões de 5L Quimiprol</span>
+                      </>
+                    )}
                   </h2>
                   <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed max-w-xl">
-                    Compre online sem fila, pague via PIX sem taxa de intermediários ou na retirada e retire em 15 minutos na Av. Couto Magalhães, 2820 - Centro Norte, Várzea Grande.
+                    {activeBottomBanner
+                      ? activeBottomBanner.subtitle
+                      : 'Compre online sem fila, pague via PIX sem taxa de intermediários ou na retirada e retire em 15 minutos na Av. Couto Magalhães, 2820 - Centro Norte, Várzea Grande.'}
                   </p>
                   <div className="flex flex-wrap items-center gap-3 pt-1">
                     <button
                       type="button"
-                      onClick={() => setIsQuickOrderModalOpen(true)}
+                      onClick={() => {
+                        if (activeBottomBanner?.linkedCategoryId) {
+                          setSelectedCategoryId(activeBottomBanner.linkedCategoryId);
+                          document
+                            .getElementById('catalogo')
+                            ?.scrollIntoView({ behavior: 'smooth' });
+                        } else {
+                          setIsQuickOrderModalOpen(true);
+                        }
+                      }}
                       className="px-5 py-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs sm:text-sm rounded-xl inline-flex items-center gap-2 cursor-pointer"
                     >
-                      <span>Abrir Compra Rápida por Lista</span>
+                      <span>
+                        {activeBottomBanner?.ctaText || 'Abrir Compra Rápida por Lista'}
+                      </span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
                     <button
@@ -799,10 +854,10 @@ export default function App() {
                   <div className="flex items-center justify-between gap-4">
                     <div>
                       <span className="text-[11px] font-mono uppercase font-black text-[#BA1826]">
-                        DESTAQUE AUTOMOTIVO & PESADO
+                        OFERTAS DESTE BANNER
                       </span>
-                      <h3 className="font-display text-2xl font-black leading-tight mt-0.5">
-                        Kit Lava-Jato & Pós-Obra 5L
+                      <h3 className="font-display text-xl sm:text-2xl font-black leading-tight mt-0.5">
+                        Destaques Selecionados
                       </h3>
                     </div>
                     <div className="w-16 h-16 rounded-full bg-[#BA1826] text-white font-mono font-black text-xs flex flex-col items-center justify-center shrink-0 shadow-md">
@@ -812,32 +867,92 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="my-4 rounded-2xl overflow-hidden h-36 bg-white border border-amber-300 flex items-center justify-between p-3 gap-3">
-                    <img
-                      src={GENERATED_IMAGES.bannerAutomotivo}
-                      alt="Linha Automotiva e Limpeza Pesada Quimiprol"
-                      className="w-28 h-full object-cover rounded-xl shrink-0"
-                    />
-                    <div className="space-y-1 text-xs">
-                      <div className="font-extrabold text-zinc-900">
-                        Detergente c/ Cera 5L + Limpa Alumínio 5L + Gel Pneu
+                  {(() => {
+                    const bottomLinkedProducts = (
+                      activeBottomBanner?.featuredProductIds || []
+                    )
+                      .map((id) =>
+                        products.find((p) => p.id === id && p.status === 'active')
+                      )
+                      .filter((p): p is Product => Boolean(p))
+                      .slice(0, 2);
+
+                    if (bottomLinkedProducts.length > 0) {
+                      return (
+                        <div className="my-4 space-y-2">
+                          {bottomLinkedProducts.map((prod) => (
+                            <div
+                              key={`bottom-banner-prod-${prod.id}`}
+                              onClick={() => setDetailProduct(prod)}
+                              className="rounded-2xl bg-white border border-amber-300 p-2.5 flex items-center justify-between gap-3 cursor-pointer hover:shadow-md transition-all"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <img
+                                  src={prod.imageUrl}
+                                  alt={prod.title}
+                                  className="w-12 h-12 rounded-xl object-cover border border-zinc-200 shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-extrabold text-xs text-zinc-900 truncate">
+                                    {prod.title}
+                                  </div>
+                                  <div className="font-mono text-xs font-black text-[#E3262E]">
+                                    {settings.hideAllPrices || prod.showPrice === false
+                                      ? 'Sob Consulta'
+                                      : formatCurrency(getEffectivePrice(prod))}
+                                  </div>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAddToCart(prod);
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] font-extrabold text-[11px] shrink-0 cursor-pointer"
+                              >
+                                + Na Cesta
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="my-4 rounded-2xl overflow-hidden h-36 bg-white border border-amber-300 flex items-center justify-between p-3 gap-3">
+                        <img
+                          src={
+                            activeBottomBanner?.imageUrl ||
+                            GENERATED_IMAGES.bannerAutomotivo
+                          }
+                          alt="Linha Automotiva e Limpeza Pesada Quimiprol"
+                          className="w-28 h-full object-cover rounded-xl shrink-0"
+                        />
+                        <div className="space-y-1 text-xs">
+                          <div className="font-extrabold text-zinc-900">
+                            Detergente c/ Cera 5L + Limpa Alumínio 5L + Gel Pneu
+                          </div>
+                          <p className="text-[11px] text-zinc-600">
+                            Alto poder de espuma e brilho espelhado.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCategoryId('cat-automotiva');
+                              document
+                                .getElementById('catalogo')
+                                ?.scrollIntoView({ behavior: 'smooth' });
+                            }}
+                            className="text-xs font-extrabold text-[#BA1826] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Ver Linha Automotiva</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-[11px] text-zinc-600">
-                        Alto poder de espuma e brilho espelhado.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCategoryId('cat-automotiva');
-                          document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' });
-                        }}
-                        className="text-xs font-extrabold text-[#BA1826] hover:underline inline-flex items-center gap-1 cursor-pointer"
-                      >
-                        <span>Ver Linha Automotiva</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   <div className="text-[11px] font-bold flex items-center justify-between border-t border-amber-500/40 pt-2.5">
                     <span>Retirada Grátis em 15min</span>
@@ -1090,11 +1205,15 @@ export default function App() {
             categories={categories}
             products={products}
             kits={kits}
+            coupons={coupons}
+            banners={banners}
             orders={orders}
             settings={settings}
             onSaveCategories={handleSaveCategories}
             onSaveProducts={handleSaveProducts}
             onSaveKits={handleSaveKits}
+            onSaveCoupons={handleSaveCoupons}
+            onSaveBanners={handleSaveBanners}
             onSaveOrders={handleSaveOrders}
             onSaveSettings={handleSaveSettings}
             onBackToStore={() => setActiveView('store')}
@@ -1223,6 +1342,8 @@ export default function App() {
         isOpen={isCartOpen}
         cart={cart}
         catalogProducts={products}
+        coupons={coupons}
+        initialCouponCode={activeCouponCode}
         settings={settings}
         customerProfile={customerProfile}
         existingOrders={orders}

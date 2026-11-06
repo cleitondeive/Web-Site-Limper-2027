@@ -4,11 +4,15 @@ import {
   CustomerProfile,
   Order,
   Product,
+  PromoBanner,
+  PromoCoupon,
   PromoKit,
   StoreSettings,
 } from '../types/commerce';
 import {
+  INITIAL_BANNERS,
   INITIAL_CATEGORIES,
+  INITIAL_COUPONS,
   INITIAL_KITS,
   INITIAL_ORDERS,
   INITIAL_PRODUCTS,
@@ -19,6 +23,8 @@ const STORAGE_KEYS = {
   CATEGORIES: 'limper_mt_categories_v3',
   PRODUCTS: 'limper_mt_products_v3',
   KITS: 'limper_mt_kits_v3',
+  COUPONS: 'limper_mt_coupons_v3',
+  BANNERS: 'limper_mt_banners_v4',
   ORDERS: 'limper_mt_orders_v3',
   SETTINGS: 'limper_mt_settings_v3',
   CART: 'limper_mt_cart_v3',
@@ -130,5 +136,16 @@ export const storageService = {
     loadFromStorage<PromoKit[]>(STORAGE_KEYS.KITS, INITIAL_KITS),
   saveKits: (kits: PromoKit[]) =>
     saveToStorage(STORAGE_KEYS.KITS, kits),
+
+  getCoupons: (): PromoCoupon[] =>
+    loadFromStorage<PromoCoupon[]>(STORAGE_KEYS.COUPONS, INITIAL_COUPONS),
+  saveCoupons: (coupons: PromoCoupon[]) =>
+    saveToStorage(STORAGE_KEYS.COUPONS, coupons),
+
+  getBanners: (): PromoBanner[] =>
+    loadFromStorage<PromoBanner[]>(STORAGE_KEYS.BANNERS, INITIAL_BANNERS),
+  saveBanners: (banners: PromoBanner[]) =>
+    saveToStorage(STORAGE_KEYS.BANNERS, banners),
 };
+
 

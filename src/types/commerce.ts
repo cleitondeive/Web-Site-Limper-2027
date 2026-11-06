@@ -158,3 +158,32 @@ export interface PromoKit {
   active: boolean;
 }
 
+export interface PromoCoupon {
+  id: string;
+  code: string;
+  description: string;
+  discountType: 'percent' | 'fixed';
+  discountValue: number;
+  minOrderValue?: number;
+  active: boolean;
+}
+
+export type BannerSlotType = 'hero_carousel' | 'bottom_banner';
+export type BannerThemeType = 'yellow_red' | 'dark_gold' | 'crimson_wine';
+
+export interface PromoBanner {
+  id: string;
+  slot: BannerSlotType;
+  badge: string;
+  title: string;
+  subtitle: string;
+  ctaText: string;
+  theme: BannerThemeType;
+  imageUrl: string;
+  linkedCategoryId?: string;
+  featuredProductIds: string[];
+  active: boolean;
+  order: number;
+}
+
+

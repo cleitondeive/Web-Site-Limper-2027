@@ -1,18 +1,23 @@
-import { Category, Order, Product, PromoKit, StoreSettings } from '../types/commerce';
-import bannerAutomotivoImg from '../assets/images/banner_automotivo_1793895269182.jpg';
-import prodLavanderiaImg from '../assets/images/prod_lavanderia_1793895269711.jpg';
-import prodLimpezaPesadaImg from '../assets/images/prod_limpeza_pesada_1793895270799.jpg';
+import {
+  Category,
+  Order,
+  Product,
+  PromoBanner,
+  PromoCoupon,
+  PromoKit,
+  StoreSettings,
+} from '../types/commerce';
 
 export const LIMPER_LOGO_URL =
   '/assets/aistudio/Captura_de_Tela_2026-11-05_a_s_13.29.37_c656bc53.png';
 
 // Exclusivamente embalagens plásticas industriais e galões de 5L / 2L de produtos de limpeza (sem frascos âmbar de cosméticos)
 export const GENERATED_IMAGES = {
-  heroCleaning: prodLavanderiaImg,
-  bannerAutomotivo: bannerAutomotivoImg,
-  prodCasa: prodLimpezaPesadaImg,
-  prodLavanderia: prodLavanderiaImg,
-  prodLimpezaPesada: prodLimpezaPesadaImg,
+  heroCleaning: '/assets/images/prod_lavanderia_1793895269711.jpg',
+  bannerAutomotivo: '/assets/images/banner_automotivo_1793895269182.jpg',
+  prodCasa: '/assets/images/prod_limpeza_pesada_1793895270799.jpg',
+  prodLavanderia: '/assets/images/prod_lavanderia_1793895269711.jpg',
+  prodLimpezaPesada: '/assets/images/prod_limpeza_pesada_1793895270799.jpg',
 };
 
 export const INITIAL_CATEGORIES: Category[] = [
@@ -814,4 +819,107 @@ export const INITIAL_KITS: PromoKit[] = [
     active: true,
   },
 ];
+
+export const INITIAL_COUPONS: PromoCoupon[] = [
+  {
+    id: 'cp-limper10',
+    code: 'LIMPER10',
+    description: '10% OFF Clube Limper MT em todo o catálogo',
+    discountType: 'percent',
+    discountValue: 10,
+    minOrderValue: 0,
+    active: true,
+  },
+  {
+    id: 'cp-bemvindo',
+    code: 'BEMVINDO',
+    description: 'R$ 10,00 OFF de boas-vindas (pedidos acima de R$ 60)',
+    discountType: 'fixed',
+    discountValue: 10,
+    minOrderValue: 60,
+    active: true,
+  },
+  {
+    id: 'cp-atacado5l',
+    code: 'ATACADO5L',
+    description: '12% OFF Atacado Galões 5L (pedidos acima de R$ 150)',
+    discountType: 'percent',
+    discountValue: 12,
+    minOrderValue: 150,
+    active: true,
+  },
+  {
+    id: 'cp-retirada15',
+    code: 'RETIRADA15',
+    description: 'R$ 15,00 OFF Especial Retirada Expressa (acima de R$ 120)',
+    discountType: 'fixed',
+    discountValue: 15,
+    minOrderValue: 120,
+    active: true,
+  },
+];
+
+export const INITIAL_BANNERS: PromoBanner[] = [
+  {
+    id: 'banner-hero-1',
+    slot: 'hero_carousel',
+    badge: 'ATACADO & VAREJO 5 LITROS',
+    title: 'Quimiprol direto na Limper MT',
+    subtitle:
+      'Compre por unidade ou em combo com desconto progressivo para casa, condomínio e empresa.',
+    ctaText: 'Aproveitar Ofertas',
+    theme: 'yellow_red',
+    imageUrl: GENERATED_IMAGES.prodLavanderia,
+    linkedCategoryId: 'cat-casa',
+    featuredProductIds: ['prod-casa-4', 'prod-lav-1', 'prod-pes-1'],
+    active: true,
+    order: 1,
+  },
+  {
+    id: 'banner-hero-2',
+    slot: 'hero_carousel',
+    badge: 'SEMANA DE OFERTAS · IMBATÍVEL',
+    title: 'Preços que cabem no bolso para comprar sem pensar',
+    subtitle:
+      'Desengordurante Quimi 90, Cloro Concentrado 5L e Linha Automotiva com preços de fábrica.',
+    ctaText: 'Ver Todas as Ofertas',
+    theme: 'dark_gold',
+    imageUrl: GENERATED_IMAGES.prodLimpezaPesada,
+    linkedCategoryId: 'cat-pesada',
+    featuredProductIds: ['prod-casa-3', 'prod-pes-2', 'prod-lav-3'],
+    active: true,
+    order: 2,
+  },
+  {
+    id: 'banner-hero-3',
+    slot: 'hero_carousel',
+    badge: 'AV. COUTO MAGALHÃES, 2820 · VÁRZEA GRANDE - MT',
+    title: 'Peça pelo Catálogo Online e Retire no Balcão Express em 15min',
+    subtitle:
+      'Seus galões de 5L e 2L já ficam separados, conferidos e lacrados. Atendemos residências, clínicas, lava-jatos e condomínios.',
+    ctaText: 'Ver Ofertas do Banner',
+    theme: 'crimson_wine',
+    imageUrl: GENERATED_IMAGES.bannerAutomotivo,
+    linkedCategoryId: 'cat-automotiva',
+    featuredProductIds: ['prod-auto-1', 'prod-auto-2', 'prod-auto-4'],
+    active: true,
+    order: 3,
+  },
+  {
+    id: 'banner-bottom-1',
+    slot: 'bottom_banner',
+    badge: 'DESTAQUE AUTOMOTIVO & PESADO · ATÉ 25% OFF',
+    title: 'Abasteça Condomínio, Clínica, Lava-Jato ou Residência com Galões 5L',
+    subtitle:
+      'Compre online sem fila, pague via PIX sem taxa de intermediários ou na retirada e retire em 15 minutos na Av. Couto Magalhães, 2820 - Centro Norte, Várzea Grande.',
+    ctaText: 'Ver Ofertas em Destaque',
+    theme: 'dark_gold',
+    imageUrl: GENERATED_IMAGES.bannerAutomotivo,
+    linkedCategoryId: 'cat-automotiva',
+    featuredProductIds: ['prod-auto-1', 'prod-auto-4', 'prod-pes-1'],
+    active: true,
+    order: 4,
+  },
+];
+
 

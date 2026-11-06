@@ -74,14 +74,6 @@ export const ProductImageWithFallback: React.FC<ProductImageProps> = ({
         className={className}
         loading="lazy"
       />
-      {volumeLabel && (
-        <div className="absolute bottom-2 left-2 bg-white/95 backdrop-blur-2xs border border-zinc-200/90 rounded-md px-2 py-0.5 flex items-center gap-1.5 shadow-2xs pointer-events-none">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#E3262E]" />
-          <span className="font-mono text-[10px] font-extrabold text-zinc-900 uppercase">
-            QUIMIPROL · {volumeLabel}
-          </span>
-        </div>
-      )}
     </div>
   );
 };

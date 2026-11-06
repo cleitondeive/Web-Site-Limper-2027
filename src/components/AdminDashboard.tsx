@@ -15,6 +15,7 @@ import {
   Layers,
   Link2,
   Lock,
+  Megaphone,
   MessageCircle,
   Package,
   Phone,
@@ -23,14 +24,18 @@ import {
   Search,
   Settings,
   ShoppingBag,
+  Sparkles,
   Star,
   Store,
+  TicketPercent,
   Trash2,
   Upload,
   Users,
   X,
 } from 'lucide-react';
 import {
+  BannerSlotType,
+  BannerThemeType,
   Category,
   CategoryIconName,
   DeliveryType,
@@ -39,6 +44,8 @@ import {
   PaymentMethod,
   Product,
   ProductStatus,
+  PromoBanner,
+  PromoCoupon,
   PromoKit,
   StoreSettings,
   UnitOfMeasure,
@@ -51,18 +58,27 @@ import {
   getEffectivePrice,
   normalizePhone,
 } from '../utils/commerce';
-import { GENERATED_IMAGES, LIMPER_LOGO_URL } from '../data/initialCatalog';
+import {
+  GENERATED_IMAGES,
+  INITIAL_BANNERS,
+  INITIAL_COUPONS,
+  LIMPER_LOGO_URL,
+} from '../data/initialCatalog';
 import { CategoryIcon, ProductImageWithFallback } from './CategoryIcon';
 
 interface AdminDashboardProps {
   categories: Category[];
   products: Product[];
   kits: PromoKit[];
+  coupons?: PromoCoupon[];
+  banners?: PromoBanner[];
   orders: Order[];
   settings: StoreSettings;
   onSaveCategories: (categories: Category[]) => void;
   onSaveProducts: (products: Product[]) => void;
   onSaveKits: (kits: PromoKit[]) => void;
+  onSaveCoupons?: (coupons: PromoCoupon[]) => void;
+  onSaveBanners?: (banners: PromoBanner[]) => void;
   onSaveOrders: (orders: Order[]) => void;
   onSaveSettings: (settings: StoreSettings) => void;
   onBackToStore: () => void;
@@ -86,17 +102,29 @@ const ICON_OPTIONS: CategoryIconName[] = [
   'Sparkles',
 ];
 
-type AdminAppTab = 'kanban' | 'products' | 'kits' | 'categories' | 'customers' | 'settings';
+type AdminAppTab =
+  | 'kanban'
+  | 'products'
+  | 'kits'
+  | 'banners'
+  | 'coupons'
+  | 'categories'
+  | 'customers'
+  | 'settings';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   categories,
   products,
   kits,
+  coupons = INITIAL_COUPONS,
+  banners = INITIAL_BANNERS,
   orders,
   settings,
   onSaveCategories,
   onSaveProducts,
   onSaveKits,
+  onSaveCoupons,
+  onSaveBanners,
   onSaveOrders,
   onSaveSettings,
   onBackToStore,
@@ -148,7 +176,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [catDesc, setCatDesc] = useState('');
   const [catIcon, setCatIcon] = useState<CategoryIconName>('Sparkles');
 
-  // Kit & Combo Form State ("Cadastro de Kits com Imagem")
+  // Kit & Combo Form State ("Cadastro de Kits com Imagem + Busca na Lupa")
   const [editingKit, setEditingKit] = useState<PromoKit | null>(null);
   const [isKitFormOpen, setIsKitFormOpen] = useState(false);
   const [kitTitle, setKitTitle] = useState('');
@@ -159,11 +187,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [kitActive, setKitActive] = useState<boolean>(true);
   const [kitImage, setKitImage] = useState(GENERATED_IMAGES.prodCasa);
   const [kitImageUploadStatus, setKitImageUploadStatus] = useState<string | null>(null);
+  const [kitProductSearchQuery, setKitProductSearchQuery] = useState('');
   const [kitQuantities, setKitQuantities] = useState<Record<string, number>>({
     'prod-casa-1': 1,
     'prod-casa-3': 1,
     'prod-casa-4': 1,
   });
+
+  // Product-to-Banner Placement State ("Escolher em qual banner colocar a promoção")
+  const [selectedProductBannerIds, setSelectedProductBannerIds] = useState<string[]>([]);
+
+  // Banner & Promotional Campaign Manager State
+  const [editingBanner, setEditingBanner] = useState<PromoBanner | null>(null);
+  const [isBannerFormOpen, setIsBannerFormOpen] = useState(false);
+  const [bannerSlot, setBannerSlot] = useState<BannerSlotType>('hero_carousel');
+  const [bannerBadge, setBannerBadge] = useState('SEMANA DE OFERTAS · LIMPER MT');
+  const [bannerTitle, setBannerTitle] = useState('');
+  const [bannerSubtitle, setBannerSubtitle] = useState('');
+  const [bannerCtaText, setBannerCtaText] = useState('Aproveitar Ofertas');
+  const [bannerTheme, setBannerTheme] = useState<BannerThemeType>('yellow_red');
+  const [bannerImage, setBannerImage] = useState(GENERATED_IMAGES.prodLavanderia);
+  const [bannerImageUploadStatus, setBannerImageUploadStatus] = useState<string | null>(null);
+  const [bannerCategoryId, setBannerCategoryId] = useState<string>('cat-casa');
+  const [bannerFeaturedProductIds, setBannerFeaturedProductIds] = useState<string[]>([]);
+  const [bannerProductSearch, setBannerProductSearch] = useState('');
+  const [bannerActive, setBannerActive] = useState(true);
+
+  // Coupon Manager State ("Cadastrar Cupom na ADM")
+  const [editingCoupon, setEditingCoupon] = useState<PromoCoupon | null>(null);
+  const [isCouponFormOpen, setIsCouponFormOpen] = useState(false);
+  const [couponCode, setCouponCode] = useState('');
+  const [couponDesc, setCouponDesc] = useState('');
+  const [couponType, setCouponType] = useState<'percent' | 'fixed'>('percent');
+  const [couponValue, setCouponValue] = useState('10');
+  const [couponMinOrder, setCouponMinOrder] = useState('0');
+  const [couponActive, setCouponActive] = useState(true);
 
   // Settings Form State
   const [formSettings, setFormSettings] = useState<StoreSettings>(settings);
@@ -321,6 +379,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProdImage(GENERATED_IMAGES.prodLimpezaPesada);
     setProdDilution('Alto rendimento profissional');
     setProdBadgeLabel('Ofertas do Mês | Limper MT');
+    setSelectedProductBannerIds([]);
     setImageUploadStatus(null);
     setIsProductFormOpen(true);
   };
@@ -340,6 +399,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProdImage(product.imageUrl);
     setProdDilution(product.dilutionHint || '');
     setProdBadgeLabel(product.badgeLabel || 'Ofertas do Mês | Limper MT');
+    const currentBannerIds = banners
+      .filter((b) => b.featuredProductIds.includes(product.id))
+      .map((b) => b.id);
+    setSelectedProductBannerIds(currentBannerIds);
     setImageUploadStatus(null);
     setIsProductFormOpen(true);
   };
@@ -373,6 +436,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       ? Number(prodPromoPrice.replace(',', '.'))
       : null;
 
+    let targetProdId = editingProduct ? editingProduct.id : `prod-${Date.now()}`;
+
     if (editingProduct) {
       const updated = products.map((p) =>
         p.id === editingProduct.id
@@ -397,7 +462,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onSaveProducts(updated);
     } else {
       const newProd: Product = {
-        id: `prod-${Date.now()}`,
+        id: targetProdId,
         sku: prodSku.trim() || `QMP-${products.length + 1}`,
         title: prodTitle.trim(),
         description: prodDesc.trim() || 'Produto da linha profissional Quimiprol.',
@@ -413,6 +478,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         badgeLabel: prodBadgeLabel.trim() || undefined,
       };
       onSaveProducts([newProd, ...products]);
+    }
+
+    // Update Banner placements if onSaveBanners is wired
+    if (onSaveBanners) {
+      const updatedBanners = banners.map((b) => {
+        const shouldInclude = selectedProductBannerIds.includes(b.id);
+        const alreadyIncludes = b.featuredProductIds.includes(targetProdId);
+        if (shouldInclude && !alreadyIncludes) {
+          return {
+            ...b,
+            featuredProductIds: [targetProdId, ...b.featuredProductIds],
+          };
+        }
+        if (!shouldInclude && alreadyIncludes) {
+          return {
+            ...b,
+            featuredProductIds: b.featuredProductIds.filter((id) => id !== targetProdId),
+          };
+        }
+        return b;
+      });
+      onSaveBanners(updatedBanners);
     }
 
     setIsProductFormOpen(false);
@@ -577,6 +664,215 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeleteKit = (kitId: string) => {
     onSaveKits(kits.filter((k) => k.id !== kitId));
+  };
+
+  // Banner & Promotional Campaign Handlers
+  const openCreateBanner = () => {
+    setEditingBanner(null);
+    setBannerSlot('hero_carousel');
+    setBannerBadge('NOVA CAMPANHA · LIMPER MT');
+    setBannerTitle('');
+    setBannerSubtitle('');
+    setBannerCtaText('Aproveitar Ofertas');
+    setBannerTheme('yellow_red');
+    setBannerImage(GENERATED_IMAGES.prodLavanderia);
+    setBannerImageUploadStatus(null);
+    setBannerCategoryId(categories[0]?.id || 'cat-casa');
+    setBannerFeaturedProductIds(['prod-casa-3', 'prod-lav-1']);
+    setBannerProductSearch('');
+    setBannerActive(true);
+    setIsBannerFormOpen(true);
+  };
+
+  const openEditBanner = (banner: PromoBanner) => {
+    setEditingBanner(banner);
+    setBannerSlot(banner.slot);
+    setBannerBadge(banner.badge);
+    setBannerTitle(banner.title);
+    setBannerSubtitle(banner.subtitle);
+    setBannerCtaText(banner.ctaText);
+    setBannerTheme(banner.theme);
+    setBannerImage(banner.imageUrl);
+    setBannerImageUploadStatus(null);
+    setBannerCategoryId(banner.linkedCategoryId || '');
+    setBannerFeaturedProductIds(banner.featuredProductIds);
+    setBannerProductSearch('');
+    setBannerActive(banner.active);
+    setIsBannerFormOpen(true);
+  };
+
+  const handleBannerImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const validMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!validMimeTypes.includes(file.type)) {
+      setBannerImageUploadStatus('Formato inválido. Selecione JPG, PNG ou WEBP.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setBannerImage(reader.result);
+        setBannerImageUploadStatus(
+          `Banner "${file.name}" (${Math.round(file.size / 1024)} KB) carregado!`
+        );
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveBanner = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bannerTitle.trim() || !onSaveBanners) return;
+
+    if (editingBanner) {
+      const updated = banners.map((b) =>
+        b.id === editingBanner.id
+          ? {
+              ...b,
+              slot: bannerSlot,
+              badge: bannerBadge.trim() || 'OFERTA LIMPER MT',
+              title: bannerTitle.trim(),
+              subtitle: bannerSubtitle.trim(),
+              ctaText: bannerCtaText.trim() || 'Ver Ofertas',
+              theme: bannerTheme,
+              imageUrl: bannerImage.trim() || GENERATED_IMAGES.prodLavanderia,
+              linkedCategoryId: bannerCategoryId || undefined,
+              featuredProductIds: bannerFeaturedProductIds,
+              active: bannerActive,
+            }
+          : b
+      );
+      onSaveBanners(updated);
+    } else {
+      const newBanner: PromoBanner = {
+        id: `banner-${Date.now()}`,
+        slot: bannerSlot,
+        badge: bannerBadge.trim() || 'OFERTA LIMPER MT',
+        title: bannerTitle.trim(),
+        subtitle:
+          bannerSubtitle.trim() ||
+          'Ofertas exclusivas na linha de limpeza profissional Quimiprol.',
+        ctaText: bannerCtaText.trim() || 'Ver Ofertas',
+        theme: bannerTheme,
+        imageUrl: bannerImage.trim() || GENERATED_IMAGES.prodLavanderia,
+        linkedCategoryId: bannerCategoryId || undefined,
+        featuredProductIds: bannerFeaturedProductIds,
+        active: bannerActive,
+        order: banners.length + 1,
+      };
+      onSaveBanners([...banners, newBanner]);
+    }
+
+    setIsBannerFormOpen(false);
+    setEditingBanner(null);
+  };
+
+  const handleToggleBannerActive = (banner: PromoBanner) => {
+    if (!onSaveBanners) return;
+    onSaveBanners(
+      banners.map((b) => (b.id === banner.id ? { ...b, active: !b.active } : b))
+    );
+  };
+
+  const handleDeleteBanner = (bannerId: string) => {
+    if (!onSaveBanners) return;
+    onSaveBanners(banners.filter((b) => b.id !== bannerId));
+  };
+
+  const handleReorderBanner = (bannerId: string, dir: 'up' | 'down') => {
+    if (!onSaveBanners) return;
+    const sorted = [...banners].sort((a, b) => a.order - b.order);
+    const idx = sorted.findIndex((b) => b.id === bannerId);
+    if (idx === -1) return;
+    const swapIdx = dir === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const temp = sorted[idx];
+    sorted[idx] = sorted[swapIdx];
+    sorted[swapIdx] = temp;
+    onSaveBanners(sorted.map((b, i) => ({ ...b, order: i + 1 })));
+  };
+
+  // Coupon Handlers ("Cadastrar Cupom na ADM")
+  const openCreateCoupon = () => {
+    setEditingCoupon(null);
+    setCouponCode('');
+    setCouponDesc('');
+    setCouponType('percent');
+    setCouponValue('10');
+    setCouponMinOrder('0');
+    setCouponActive(true);
+    setIsCouponFormOpen(true);
+  };
+
+  const openEditCoupon = (cp: PromoCoupon) => {
+    setEditingCoupon(cp);
+    setCouponCode(cp.code);
+    setCouponDesc(cp.description);
+    setCouponType(cp.discountType);
+    setCouponValue(String(cp.discountValue));
+    setCouponMinOrder(String(cp.minOrderValue || 0));
+    setCouponActive(cp.active);
+    setIsCouponFormOpen(true);
+  };
+
+  const handleSaveCoupon = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!couponCode.trim() || !onSaveCoupons) return;
+    const cleanCode = couponCode.trim().toUpperCase().replace(/\s+/g, '');
+    const valNum = Number(couponValue.replace(',', '.')) || 0;
+    const minNum = Number(couponMinOrder.replace(',', '.')) || 0;
+
+    if (editingCoupon) {
+      const updated = coupons.map((c) =>
+        c.id === editingCoupon.id
+          ? {
+              ...c,
+              code: cleanCode,
+              description:
+                couponDesc.trim() ||
+                (couponType === 'percent'
+                  ? `${valNum}% OFF Especial Limper MT`
+                  : `${formatCurrency(valNum)} OFF Limper MT`),
+              discountType: couponType,
+              discountValue: valNum,
+              minOrderValue: minNum,
+              active: couponActive,
+            }
+          : c
+      );
+      onSaveCoupons(updated);
+    } else {
+      const newCoupon: PromoCoupon = {
+        id: `cp-${Date.now()}`,
+        code: cleanCode,
+        description:
+          couponDesc.trim() ||
+          (couponType === 'percent'
+            ? `${valNum}% OFF Especial Limper MT`
+            : `${formatCurrency(valNum)} OFF Limper MT`),
+        discountType: couponType,
+        discountValue: valNum,
+        minOrderValue: minNum,
+        active: couponActive,
+      };
+      onSaveCoupons([newCoupon, ...coupons]);
+    }
+
+    setIsCouponFormOpen(false);
+    setEditingCoupon(null);
+  };
+
+  const handleToggleCouponActive = (cp: PromoCoupon) => {
+    if (!onSaveCoupons) return;
+    onSaveCoupons(
+      coupons.map((c) => (c.id === cp.id ? { ...c, active: !c.active } : c))
+    );
+  };
+
+  const handleDeleteCoupon = (cpId: string) => {
+    if (!onSaveCoupons) return;
+    onSaveCoupons(coupons.filter((c) => c.id !== cpId));
   };
 
   // Categories Handlers
@@ -824,9 +1120,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     },
     {
       id: 'kits',
-      label: 'Kits & Combos',
+      label: 'Kits & Combos (Lupa)',
       badge: kits.length,
       icon: Gift,
+    },
+    {
+      id: 'banners',
+      label: 'Banners & Promoções',
+      badge: banners.length,
+      icon: Megaphone,
+    },
+    {
+      id: 'coupons',
+      label: 'Cupons de Desconto',
+      badge: coupons.filter((c) => c.active).length,
+      icon: TicketPercent,
     },
     {
       id: 'categories',
@@ -1669,6 +1977,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
+                  {/* CHOOSE WHICH BANNER(S) WILL DISPLAY THIS PRODUCT OFFER ("Cadastrar ofertas e escolher qual banner colocar a promoção") */}
+                  <div className="p-4 rounded-2xl bg-[#FFFBEB] border border-[#FDE68A] space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Megaphone className="w-4 h-4 text-[#E3262E]" />
+                        <span className="text-xs font-extrabold text-zinc-900">
+                          Colocar esta Oferta em qual Banner Promocional? (Aparece automaticamente no Banner escolhido)
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-mono font-bold text-[#B45309]">
+                        {selectedProductBannerIds.length} banner(s) selecionado(s)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                      {banners.map((b, idx) => {
+                        const isChecked = selectedProductBannerIds.includes(b.id);
+                        return (
+                          <button
+                            key={`prod-banner-link-${b.id}`}
+                            type="button"
+                            onClick={() => {
+                              setSelectedProductBannerIds((prev) =>
+                                prev.includes(b.id)
+                                  ? prev.filter((id) => id !== b.id)
+                                  : [...prev, b.id]
+                              );
+                            }}
+                            className={`p-2.5 rounded-xl border text-left transition-all flex items-start gap-2 cursor-pointer ${
+                              isChecked
+                                ? 'bg-white border-2 border-[#E3262E] shadow-2xs'
+                                : 'bg-white/70 hover:bg-white border-zinc-200/90 text-zinc-700'
+                            }`}
+                          >
+                            <div
+                              className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center shrink-0 border ${
+                                isChecked
+                                  ? 'bg-[#E3262E] border-[#E3262E] text-white'
+                                  : 'bg-white border-zinc-300'
+                              }`}
+                            >
+                              {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="block text-[9px] font-mono uppercase font-extrabold text-[#D97706]">
+                                {b.slot === 'hero_carousel'
+                                  ? `Banner Topo #${idx + 1}`
+                                  : 'Banner Inferior'}
+                              </span>
+                              <span className="block text-xs font-extrabold text-zinc-900 truncate">
+                                {b.title}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="flex justify-end gap-2 pt-2">
                     <button
                       type="button"
@@ -1681,7 +2048,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       type="submit"
                       className="px-6 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 text-xs font-extrabold rounded-xl cursor-pointer shadow-xs"
                     >
-                      Salvar Produto no Catálogo
+                      Salvar Produto & Atualizar Banners
                     </button>
                   </div>
                 </form>
@@ -1933,31 +2300,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         />
                       </div>
 
-                      {/* Composição de Produtos do Kit */}
-                      <div className="p-4 rounded-2xl bg-[#FAFAFA] border border-zinc-200 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-extrabold text-zinc-900">
-                            Selecione os Produtos Inclusos no Kit *
-                          </span>
-                          <span className="text-[11px] font-mono font-bold text-[#E3262E]">
+                      {/* Composição de Produtos do Kit com Busca na Lupa ("Puxar item já cadastrado na lupa e adicionar no kit") */}
+                      <div className="p-4 rounded-2xl bg-[#FAFAFA] border border-zinc-200 space-y-3.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="text-xs font-extrabold text-zinc-900 block">
+                              1. Pesquisar Produto Cadastrado na Lupa p/ Puxar ao Kit
+                            </span>
+                            <span className="text-[11px] text-zinc-500">
+                              Digite o nome, código SKU ou litragem (ex: Quimi 90, Lavanda, 5L) e clique em &ldquo;+ Puxar p/ Kit&rdquo;
+                            </span>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-full bg-[#FFFBEB] border border-[#FFBE00] text-[11px] font-mono font-extrabold text-[#E3262E]">
                             {Object.values(kitQuantities).reduce((a, b) => a + b, 0)} un. no combo
                           </span>
                         </div>
 
-                        <div className="max-h-56 overflow-y-auto divide-y divide-zinc-200/70 bg-white rounded-xl border border-zinc-200 p-2">
+                        {/* Interactive Magnifying Glass Search Input */}
+                        <div className="relative">
+                          <Search className="w-4 h-4 text-[#E3262E] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="search"
+                            value={kitProductSearchQuery}
+                            onChange={(e) => setKitProductSearchQuery(e.target.value)}
+                            placeholder="Pesquisar na lupa produto cadastrado para puxar pro kit..."
+                            className="w-full pl-9 pr-4 py-2.5 bg-white border-2 border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-xl text-xs font-semibold text-zinc-900"
+                          />
+                        </div>
+
+                        {/* Search Results List to Pull Products into Kit */}
+                        <div className="max-h-44 overflow-y-auto divide-y divide-zinc-100 bg-white rounded-xl border border-zinc-200 p-1.5">
                           {products
-                            .filter((p) => p.status === 'active')
+                            .filter((p) => {
+                              if (p.status !== 'active') return false;
+                              const q = kitProductSearchQuery.trim().toLowerCase();
+                              if (!q) return true;
+                              return (
+                                p.title.toLowerCase().includes(q) ||
+                                p.sku.toLowerCase().includes(q) ||
+                                p.volumeLabel.toLowerCase().includes(q)
+                              );
+                            })
                             .map((prod) => {
                               const qty = kitQuantities[prod.id] || 0;
                               return (
                                 <div
-                                  key={`kit-prod-${prod.id}`}
-                                  className={`py-2 px-2 flex items-center justify-between gap-2 text-xs rounded-lg ${
-                                    qty > 0 ? 'bg-[#FFFBEB]' : ''
+                                  key={`kit-search-${prod.id}`}
+                                  className={`py-1.5 px-2 flex items-center justify-between gap-2 text-xs rounded-lg transition-colors ${
+                                    qty > 0 ? 'bg-[#FFFBEB]/80' : 'hover:bg-zinc-50'
                                   }`}
                                 >
                                   <div className="flex items-center gap-2.5 min-w-0">
-                                    <div className="w-9 h-9 rounded-lg bg-white border border-zinc-200 overflow-hidden shrink-0">
+                                    <div className="w-8 h-8 rounded-lg bg-white border border-zinc-200 overflow-hidden shrink-0">
                                       <ProductImageWithFallback
                                         src={prod.imageUrl}
                                         alt={prod.title}
@@ -1968,44 +2362,125 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       <strong className="text-zinc-900 block truncate">
                                         {prod.title}
                                       </strong>
-                                      <span className="text-[11px] font-mono text-zinc-500">
-                                        {prod.volumeLabel} · {formatCurrency(getEffectivePrice(prod))}
+                                      <span className="text-[10px] font-mono text-zinc-500">
+                                        {prod.sku} · {prod.volumeLabel} ·{' '}
+                                        {formatCurrency(getEffectivePrice(prod))}
                                       </span>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setKitQuantities((prev) => ({
-                                          ...prev,
-                                          [prod.id]: Math.max(0, (prev[prod.id] || 0) - 1),
-                                        }))
-                                      }
-                                      className="w-6 h-6 rounded-md bg-zinc-100 hover:bg-zinc-200 font-bold cursor-pointer"
-                                    >
-                                      -
-                                    </button>
-                                    <span className="w-5 text-center font-mono font-extrabold">
-                                      {qty}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setKitQuantities((prev) => ({
+                                        ...prev,
+                                        [prod.id]: (prev[prod.id] || 0) + 1,
+                                      }))
+                                    }
+                                    className={`px-2.5 py-1.5 rounded-lg font-extrabold text-[11px] inline-flex items-center gap-1 shrink-0 cursor-pointer transition-colors ${
+                                      qty > 0
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950'
+                                    }`}
+                                  >
+                                    <Plus className="w-3 h-3 stroke-[2.5]" />
+                                    <span>
+                                      {qty > 0 ? `No Kit (${qty}x)` : 'Puxar p/ Kit'}
                                     </span>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setKitQuantities((prev) => ({
-                                          ...prev,
-                                          [prod.id]: (prev[prod.id] || 0) + 1,
-                                        }))
-                                      }
-                                      className="w-6 h-6 rounded-md bg-[#FFBE00] text-zinc-950 font-bold cursor-pointer"
-                                    >
-                                      +
-                                    </button>
-                                  </div>
+                                  </button>
                                 </div>
                               );
                             })}
+                        </div>
+
+                        {/* Selected Products Currently Pulled into the Kit */}
+                        <div className="space-y-2 pt-1">
+                          <span className="text-xs font-extrabold text-zinc-900 block">
+                            2. Itens Puxados e Inclusos neste Kit:
+                          </span>
+                          {Object.entries(kitQuantities).filter(([, q]) => q > 0).length ===
+                          0 ? (
+                            <div className="p-3 rounded-xl bg-white border border-dashed border-zinc-300 text-center text-xs text-zinc-400">
+                              Nenhum produto puxado ainda. Pesquise na lupa acima e clique em &ldquo;+ Puxar p/ Kit&rdquo;.
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {Object.entries(kitQuantities)
+                                .filter(([, q]) => q > 0)
+                                .map(([prodId, qty]) => {
+                                  const prod = products.find((p) => p.id === prodId);
+                                  if (!prod) return null;
+                                  return (
+                                    <div
+                                      key={`kit-selected-${prod.id}`}
+                                      className="p-2 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] flex items-center justify-between gap-2 text-xs"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <div className="w-8 h-8 rounded-lg bg-white border border-zinc-200 overflow-hidden shrink-0">
+                                          <ProductImageWithFallback
+                                            src={prod.imageUrl}
+                                            alt={prod.title}
+                                            className="w-full h-full object-cover"
+                                          />
+                                        </div>
+                                        <div className="truncate">
+                                          <strong className="text-zinc-900 block truncate">
+                                            {prod.title}
+                                          </strong>
+                                          <span className="text-[10px] font-mono text-zinc-600">
+                                            {prod.volumeLabel} · Subtotal:{' '}
+                                            {formatCurrency(getEffectivePrice(prod) * qty)}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setKitQuantities((prev) => ({
+                                              ...prev,
+                                              [prod.id]: Math.max(0, (prev[prod.id] || 0) - 1),
+                                            }))
+                                          }
+                                          className="w-6 h-6 rounded-md bg-white border border-zinc-300 font-bold cursor-pointer"
+                                        >
+                                          -
+                                        </button>
+                                        <span className="w-5 text-center font-mono font-extrabold">
+                                          {qty}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setKitQuantities((prev) => ({
+                                              ...prev,
+                                              [prod.id]: (prev[prod.id] || 0) + 1,
+                                            }))
+                                          }
+                                          className="w-6 h-6 rounded-md bg-[#FFBE00] text-zinc-950 font-bold cursor-pointer"
+                                        >
+                                          +
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setKitQuantities((prev) => ({
+                                              ...prev,
+                                              [prod.id]: 0,
+                                            }))
+                                          }
+                                          title="Remover do kit"
+                                          className="p-1 text-rose-600 hover:text-rose-800 cursor-pointer"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          )}
                         </div>
 
                         {/* Cálculo Automático de Soma Avulsa vs Preço Promocional do Kit */}
@@ -2273,6 +2748,652 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB BANNERS & PROMOÇÕES AUTOMÁTICAS ("Cadastrar Banner das Promoções Automáticas e Escolher Produtos do Banner") */}
+          {activeTab === 'banners' && (
+            <div className="space-y-4 no-print">
+              <div className="bg-white rounded-2xl border border-zinc-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-lg font-extrabold text-zinc-900">
+                    Banners Rotativos & Campanhas de Ofertas ({banners.length})
+                  </h2>
+                  <p className="text-xs text-zinc-500">
+                    Cadastre banners automáticos para o Carrossel do Topo ou Banner Inferior, envie fotos e puxe na lupa quais produtos em oferta aparecem dentro de cada banner.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={openCreateBanner}
+                  className="px-4 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Cadastrar Novo Banner Promocional</span>
+                </button>
+              </div>
+
+              {isBannerFormOpen && (
+                <form
+                  onSubmit={handleSaveBanner}
+                  className="bg-white rounded-3xl border-2 border-[#FFBE00] p-6 shadow-md space-y-5"
+                >
+                  <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] text-[#E3262E] flex items-center justify-center">
+                        <Megaphone className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-mono uppercase font-extrabold text-[#E3262E] block">
+                          GESTOR DE VITRINE & PROMOÇÃO AUTOMÁTICA
+                        </span>
+                        <h3 className="font-display text-lg font-extrabold text-zinc-900">
+                          {editingBanner
+                            ? `Editar Banner: ${editingBanner.title}`
+                            : 'Cadastrar Novo Banner de Promoção Automática'}
+                        </h3>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsBannerFormOpen(false)}
+                      className="text-xs font-bold text-zinc-500 hover:text-zinc-800 cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    <div className="lg:col-span-7 space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Onde este Banner vai aparecer? *
+                          </label>
+                          <select
+                            value={bannerSlot}
+                            onChange={(e) => setBannerSlot(e.target.value as BannerSlotType)}
+                            className="w-full px-3 py-2 bg-[#FFFBEB] border border-[#FFBE00] rounded-xl text-xs font-extrabold text-zinc-900"
+                          >
+                            <option value="hero_carousel">
+                              Carrossel Principal Rotativo (Topo da Home)
+                            </option>
+                            <option value="bottom_banner">
+                              Banner Promocional Destaque (Parte Inferior da Home)
+                            </option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Estilo Visual / Cores do Banner *
+                          </label>
+                          <select
+                            value={bannerTheme}
+                            onChange={(e) => setBannerTheme(e.target.value as BannerThemeType)}
+                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
+                          >
+                            <option value="yellow_red">
+                              Amarelo & Vermelho Multi-Ofertas (Estilo Todimo/Drogasil)
+                            </option>
+                            <option value="dark_gold">
+                              Preto & Ouro Imbatível (Alto Contraste)
+                            </option>
+                            <option value="crimson_wine">
+                              Vinho & Dourado Express (Institucional & Produtos)
+                            </option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Selo Superior (Badge) *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={bannerBadge}
+                            onChange={(e) => setBannerBadge(e.target.value)}
+                            placeholder="Ex: SEMANA DE OFERTAS · ATÉ 25% OFF"
+                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Texto do Botão (CTA)
+                          </label>
+                          <input
+                            type="text"
+                            value={bannerCtaText}
+                            onChange={(e) => setBannerCtaText(e.target.value)}
+                            placeholder="Ex: Aproveitar Ofertas"
+                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Título Principal da Promoção *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={bannerTitle}
+                          onChange={(e) => setBannerTitle(e.target.value)}
+                          placeholder="Ex: Festival de Galões 5L Quimiprol com Preço de Fábrica"
+                          className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Subtítulo / Explicação da Campanha
+                          </label>
+                          <input
+                            type="text"
+                            value={bannerSubtitle}
+                            onChange={(e) => setBannerSubtitle(e.target.value)}
+                            placeholder="Ex: Compre online e retire em 15 minutos na Av. Couto Magalhães, 2820"
+                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Categoria Alvo do Botão
+                          </label>
+                          <select
+                            value={bannerCategoryId}
+                            onChange={(e) => setBannerCategoryId(e.target.value)}
+                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                          >
+                            <option value="">Ver Todas as Ofertas</option>
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Search & Link Offer Products into this Banner */}
+                      <div className="p-4 rounded-2xl bg-[#FAFAFA] border border-zinc-200 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-xs font-extrabold text-zinc-900 block">
+                              Produtos em Oferta Exibidos Dentro Deste Banner (Até 3 Destaques)
+                            </span>
+                            <span className="text-[11px] text-zinc-500">
+                              Pesquise na lupa e selecione os produtos que aparecerão com foto e preço dentro do banner
+                            </span>
+                          </div>
+                          <span className="px-2.5 py-0.5 rounded-full bg-[#FFFBEB] border border-[#FFBE00] font-mono text-[11px] font-extrabold text-[#E3262E]">
+                            {bannerFeaturedProductIds.length} vinculado(s)
+                          </span>
+                        </div>
+
+                        <div className="relative">
+                          <Search className="w-4 h-4 text-[#E3262E] absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="search"
+                            value={bannerProductSearch}
+                            onChange={(e) => setBannerProductSearch(e.target.value)}
+                            placeholder="Pesquisar produto na lupa para colocar neste banner..."
+                            className="w-full pl-9 pr-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs"
+                          />
+                        </div>
+
+                        <div className="max-h-44 overflow-y-auto divide-y divide-zinc-100 bg-white rounded-xl border border-zinc-200 p-1.5">
+                          {products
+                            .filter((p) => {
+                              if (p.status !== 'active') return false;
+                              const q = bannerProductSearch.trim().toLowerCase();
+                              if (!q) return true;
+                              return (
+                                p.title.toLowerCase().includes(q) ||
+                                p.sku.toLowerCase().includes(q)
+                              );
+                            })
+                            .map((prod) => {
+                              const isLinked = bannerFeaturedProductIds.includes(prod.id);
+                              return (
+                                <div
+                                  key={`banner-pick-${prod.id}`}
+                                  className={`py-1.5 px-2 flex items-center justify-between gap-2 text-xs rounded-lg ${
+                                    isLinked ? 'bg-[#FFFBEB]' : ''
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <img
+                                      src={prod.imageUrl}
+                                      alt={prod.title}
+                                      className="w-8 h-8 rounded-lg object-cover border border-zinc-200 shrink-0"
+                                    />
+                                    <div className="truncate">
+                                      <strong className="text-zinc-900 block truncate">
+                                        {prod.title}
+                                      </strong>
+                                      <span className="font-mono text-[10px] text-zinc-500">
+                                        {prod.volumeLabel} · {formatCurrency(getEffectivePrice(prod))}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setBannerFeaturedProductIds((prev) =>
+                                        prev.includes(prod.id)
+                                          ? prev.filter((id) => id !== prod.id)
+                                          : [...prev, prod.id]
+                                      );
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold cursor-pointer ${
+                                      isLinked
+                                        ? 'bg-[#E3262E] text-white'
+                                        : 'bg-zinc-100 hover:bg-[#FFBE00] text-zinc-900'
+                                    }`}
+                                  >
+                                    {isLinked ? '✓ No Banner' : '+ Colocar no Banner'}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Banner Image Upload & URL */}
+                    <div className="lg:col-span-5 p-4 rounded-2xl bg-[#FAFAFA] border border-zinc-200 space-y-3 self-start">
+                      <div className="flex items-center gap-2">
+                        <ImageIcon className="w-4 h-4 text-[#E3262E]" />
+                        <h4 className="font-display text-sm font-extrabold text-zinc-900">
+                          Imagem do Banner (Link ou Upload JPG/PNG/WEBP)
+                        </h4>
+                      </div>
+
+                      <div className="rounded-2xl overflow-hidden border border-zinc-200 bg-white h-40 relative">
+                        <img
+                          src={bannerImage}
+                          alt={bannerTitle || 'Preview do Banner'}
+                          className="w-full h-full object-cover"
+                        />
+                        <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold shadow-xs">
+                          {bannerSlot === 'hero_carousel'
+                            ? 'CARROSSEL TOPO'
+                            : 'BANNER INFERIOR'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Link Direto da Imagem (URL)
+                        </label>
+                        <input
+                          type="text"
+                          value={bannerImage}
+                          onChange={(e) => setBannerImage(e.target.value)}
+                          placeholder="https://..."
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs font-mono"
+                        />
+                      </div>
+
+                      <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-white text-xs font-extrabold cursor-pointer w-full justify-center">
+                        <Upload className="w-4 h-4 text-[#FFBE00]" />
+                        <span>Enviar Imagem do Banner (JPG, PNG, WEBP)</span>
+                        <input
+                          type="file"
+                          accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                          onChange={handleBannerImageUpload}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {bannerImageUploadStatus && (
+                        <p className="text-[11px] font-bold text-emerald-700">
+                          {bannerImageUploadStatus}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-2 border-t border-zinc-100">
+                    <button
+                      type="button"
+                      onClick={() => setIsBannerFormOpen(false)}
+                      className="px-4 py-2.5 rounded-xl border border-zinc-300 text-xs font-bold text-zinc-700 cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-6 py-2.5 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs cursor-pointer shadow-xs"
+                    >
+                      Salvar Banner Promocional
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* List of Registered Banners */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[...banners]
+                  .sort((a, b) => a.order - b.order)
+                  .map((b, idx) => {
+                    const linkedProds = b.featuredProductIds
+                      .map((id) => products.find((p) => p.id === id))
+                      .filter((p): p is Product => Boolean(p));
+
+                    return (
+                      <div
+                        key={b.id}
+                        className={`rounded-2xl border overflow-hidden bg-white flex flex-col justify-between shadow-2xs ${
+                          b.active ? 'border-zinc-200' : 'border-zinc-200 opacity-60'
+                        }`}
+                      >
+                        <div>
+                          <div className="relative h-36 bg-zinc-900 overflow-hidden">
+                            <img
+                              src={b.imageUrl}
+                              alt={b.title}
+                              className="w-full h-full object-cover opacity-85"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
+                            <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold">
+                              {b.slot === 'hero_carousel'
+                                ? `SLIDE TOPO #${idx + 1}`
+                                : 'BANNER INFERIOR HOME'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleBannerActive(b)}
+                              className={`absolute top-2.5 right-2.5 px-2.5 py-0.5 rounded-md font-mono text-[10px] font-extrabold cursor-pointer ${
+                                b.active
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-zinc-700 text-white'
+                              }`}
+                            >
+                              {b.active ? 'ATIVO NA LOJA' : 'PAUSADO'}
+                            </button>
+                            <div className="absolute bottom-2.5 left-3 right-3 text-white">
+                              <span className="text-[10px] font-mono uppercase text-[#FFBE00] font-bold block">
+                                {b.badge}
+                              </span>
+                              <h3 className="font-display text-sm font-extrabold leading-tight truncate">
+                                {b.title}
+                              </h3>
+                            </div>
+                          </div>
+
+                          <div className="p-4 space-y-2.5">
+                            <p className="text-xs text-zinc-500 line-clamp-2">
+                              {b.subtitle}
+                            </p>
+                            <div>
+                              <span className="block text-[10px] font-mono uppercase text-zinc-400 font-bold mb-1">
+                                Ofertas exibidas neste banner ({linkedProds.length}):
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {linkedProds.map((p) => (
+                                  <span
+                                    key={`${b.id}-${p.id}`}
+                                    className="px-2 py-0.5 rounded-md bg-[#FFFBEB] border border-[#FDE68A] text-[10px] font-bold text-zinc-900"
+                                  >
+                                    {p.title} ({formatCurrency(getEffectivePrice(p))})
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-3.5 border-t border-zinc-100 bg-[#FAFAFA] flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleReorderBanner(b.id, 'up')}
+                              className="p-1.5 rounded-lg bg-white border border-zinc-200 text-zinc-600 hover:bg-zinc-100 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleReorderBanner(b.id, 'down')}
+                              className="p-1.5 rounded-lg bg-white border border-zinc-200 text-zinc-600 hover:bg-zinc-100 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEditBanner(b)}
+                              className="px-3 py-1.5 rounded-xl bg-white hover:bg-zinc-100 border border-zinc-300 text-xs font-bold text-zinc-800 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Editar / Escolher Ofertas</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteBanner(b.id)}
+                              className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB CUPONS DE DESCONTO ("Cadastrar Cupom na ADM") */}
+          {activeTab === 'coupons' && (
+            <div className="space-y-4 no-print">
+              <div className="bg-white rounded-2xl border border-zinc-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-lg font-extrabold text-zinc-900">
+                    Cupons de Desconto & Vouchers Atacado ({coupons.length})
+                  </h2>
+                  <p className="text-xs text-zinc-500">
+                    Crie cupons em porcentagem (%) ou valor fixo (R$). Os cupons ativos aparecem na Home e na Cesta do cliente para aplicação em 1 clique!
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={openCreateCoupon}
+                  className="px-4 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Cadastrar Novo Cupom</span>
+                </button>
+              </div>
+
+              {isCouponFormOpen && (
+                <form
+                  onSubmit={handleSaveCoupon}
+                  className="bg-white rounded-3xl border-2 border-[#FFBE00] p-6 shadow-md space-y-4"
+                >
+                  <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+                    <div className="flex items-center gap-2">
+                      <TicketPercent className="w-5 h-5 text-[#E3262E]" />
+                      <h3 className="font-display text-base font-extrabold text-zinc-900">
+                        {editingCoupon
+                          ? `Editar Cupom: ${editingCoupon.code}`
+                          : 'Cadastrar Novo Cupom Promocional Limper MT'}
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsCouponFormOpen(false)}
+                      className="text-xs font-bold text-zinc-500 hover:text-zinc-800 cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-700 mb-1">
+                        Código do Cupom *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={couponCode}
+                        onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                        placeholder="Ex: LIMPER15"
+                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-extrabold uppercase"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-700 mb-1">
+                        Tipo de Desconto *
+                      </label>
+                      <select
+                        value={couponType}
+                        onChange={(e) =>
+                          setCouponType(e.target.value as 'percent' | 'fixed')
+                        }
+                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold"
+                      >
+                        <option value="percent">Porcentagem (% OFF)</option>
+                        <option value="fixed">Valor Fixo em Reais (R$ OFF)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-700 mb-1">
+                        {couponType === 'percent'
+                          ? 'Desconto (%)'
+                          : 'Valor do Desconto (R$)'}{' '}
+                        *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        required
+                        value={couponValue}
+                        onChange={(e) => setCouponValue(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-700 mb-1">
+                        Pedido Mínimo (R$)
+                      </label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={couponMinOrder}
+                        onChange={(e) => setCouponMinOrder(e.target.value)}
+                        placeholder="0 = Sem mínimo"
+                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-bold text-zinc-700 mb-1">
+                        Descrição Comercial (Aparece na Cesta)
+                      </label>
+                      <input
+                        type="text"
+                        value={couponDesc}
+                        onChange={(e) => setCouponDesc(e.target.value)}
+                        placeholder="Ex: 15% OFF Especial Semana da Limpeza Limper MT"
+                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="submit"
+                        className="w-full py-2.5 px-4 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer shadow-xs"
+                      >
+                        Salvar Cupom na Loja
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                {coupons.map((cp) => (
+                  <div
+                    key={cp.id}
+                    className={`rounded-2xl border p-4 bg-white flex flex-col justify-between gap-3 shadow-2xs ${
+                      cp.active ? 'border-zinc-200' : 'border-zinc-200 opacity-60'
+                    }`}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2.5 py-1 rounded-lg bg-[#FFFBEB] border border-[#FFBE00] font-mono text-xs font-extrabold text-[#E3262E]">
+                          {cp.code}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleCouponActive(cp)}
+                          className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-extrabold cursor-pointer ${
+                            cp.active
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-zinc-200 text-zinc-600'
+                          }`}
+                        >
+                          {cp.active ? 'ATIVO' : 'INATIVO'}
+                        </button>
+                      </div>
+
+                      <div className="font-mono text-lg font-black text-zinc-950">
+                        {cp.discountType === 'percent'
+                          ? `${cp.discountValue}% OFF`
+                          : `-${formatCurrency(cp.discountValue)}`}
+                      </div>
+
+                      <p className="text-xs text-zinc-600 leading-snug">
+                        {cp.description}
+                      </p>
+
+                      <div className="text-[11px] font-mono text-zinc-400">
+                        {cp.minOrderValue && cp.minOrderValue > 0
+                          ? `Pedido mín.: ${formatCurrency(cp.minOrderValue)}`
+                          : 'Sem valor mínimo de pedido'}
+                      </div>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-zinc-100 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => openEditCoupon(cp)}
+                        className="text-xs font-bold text-zinc-700 hover:text-zinc-950 inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Editar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCoupon(cp.id)}
+                        className="text-xs font-bold text-rose-600 hover:text-rose-800 inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Excluir</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
