@@ -191,11 +191,11 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
       customerPhone: normalizePhone(customerPhone),
       pickupCode:
         deliveryType === 'pickup'
-          ? `EXPRESS-${nextOrderNumber}`
-          : `ROTA-${nextOrderNumber}`,
+          ? `BALCÃO-${nextOrderNumber}`
+          : `PIN-${nextOrderNumber}`,
       estimatedTime:
         deliveryType === 'pickup'
-          ? 'Separação Expressa: pronto em ~15 min no Balcão Limper MT'
+          ? 'Separação Expressa: pronto em ~15 min no Balcão Limper MT (Av. Couto Magalhães, 2820)'
           : 'Entrega programada hoje com galões conferidos e lacrados',
       items: cart.map((item) => {
         const visible = isProductPriceVisible(item.product, settings);
@@ -349,10 +349,24 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
               {cart.map(({ product, quantity }) => {
                 const visible = isProductPriceVisible(product, settings);
                 const unitPrice = getEffectivePrice(product);
+                const isKitCombo =
+                  product.unit === 'Kit' || product.id.startsWith('kit-');
+                const hasPromoDiscount =
+                  visible &&
+                  typeof product.promoPrice === 'number' &&
+                  product.promoPrice < product.price;
+                const itemSavings = hasPromoDiscount
+                  ? Math.round((product.price - unitPrice) * quantity * 100) / 100
+                  : 0;
+
                 return (
                   <div
                     key={product.id}
-                    className="flex items-center gap-3.5 py-3 border-b border-zinc-100"
+                    className={`flex items-start gap-3.5 p-3 rounded-2xl border transition-colors ${
+                      isKitCombo
+                        ? 'bg-[#FFFBEB]/70 border-[#FDE68A]'
+                        : 'bg-white border-zinc-200/80'
+                    }`}
                   >
                     <div className="w-16 h-16 rounded-xl bg-zinc-100 overflow-hidden shrink-0 border border-zinc-200">
                       <ProductImageWithFallback
@@ -363,19 +377,45 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-bold text-zinc-900 truncate">
+                      <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                        {isKitCombo && (
+                          <span className="px-2 py-0.5 rounded bg-[#E3262E] text-white font-mono text-[9px] font-extrabold uppercase">
+                            COMBO PROMOCIONAL FECHADO
+                          </span>
+                        )}
+                        <span className="text-[10px] font-mono font-bold text-zinc-500">
+                          {product.volumeLabel}
+                        </span>
+                      </div>
+
+                      <h4 className="text-sm font-extrabold text-zinc-900 leading-snug">
                         {product.title}
                       </h4>
-                      <div className="text-xs text-zinc-500 font-mono mt-0.5">
-                        {product.volumeLabel} ·{' '}
-                        {visible ? `${formatCurrency(unitPrice)} un.` : 'Valor sob consulta'}
-                      </div>
-                      <div className="text-sm font-mono font-extrabold text-zinc-900 mt-1 tabular-nums">
-                        {visible ? formatCurrency(unitPrice * quantity) : 'Cotação no pedido'}
+
+                      {isKitCombo && product.dilutionHint && (
+                        <p className="text-[11px] text-zinc-600 leading-snug mt-0.5">
+                          {product.dilutionHint}
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap items-baseline gap-2 mt-1.5">
+                        {hasPromoDiscount && (
+                          <span className="text-[11px] text-zinc-400 line-through font-mono tabular-nums">
+                            De {formatCurrency(product.price * quantity)}
+                          </span>
+                        )}
+                        <span className="text-sm font-mono font-extrabold text-zinc-950 tabular-nums">
+                          {visible ? formatCurrency(unitPrice * quantity) : 'Cotação no pedido'}
+                        </span>
+                        {itemSavings > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono text-[10px] font-extrabold tabular-nums">
+                            Economia -{formatCurrency(itemSavings)}
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex items-center bg-[#FAFAFA] border border-zinc-200 rounded-xl p-1 gap-1.5 shrink-0">
+                    <div className="flex items-center bg-[#FAFAFA] border border-zinc-200 rounded-xl p-1 gap-1.5 shrink-0 self-center">
                       <button
                         type="button"
                         onClick={() => onUpdateQuantity(product.id, quantity - 1)}

@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Calendar,
   Check,
+  Clock,
   DollarSign,
   Download,
   Edit3,
@@ -11,9 +14,11 @@ import {
   Eye,
   FolderKanban,
   Gift,
+  History,
   Image as ImageIcon,
   Layers,
   Link2,
+  ListFilter,
   Lock,
   Megaphone,
   MessageCircle,
@@ -21,6 +26,7 @@ import {
   Phone,
   Plus,
   Printer,
+  RotateCcw,
   Search,
   Settings,
   ShoppingBag,
@@ -29,6 +35,7 @@ import {
   Store,
   TicketPercent,
   Trash2,
+  Truck,
   Upload,
   Users,
   X,
@@ -40,6 +47,7 @@ import {
   CategoryIconName,
   DeliveryType,
   Order,
+  OrderDatePreset,
   OrderStatus,
   PaymentMethod,
   Product,
@@ -52,11 +60,16 @@ import {
 } from '../types/commerce';
 import {
   ORDER_STATUS_META,
+  filterOrdersByCriteria,
   formatCurrency,
   formatPaymentMethodLabel,
   formatPhone,
+  getAdjacentOrderStatus,
   getEffectivePrice,
   normalizePhone,
+  summarizeOrdersPeriod,
+  toDateKeyYmd,
+  transitionOrderStatus,
 } from '../utils/commerce';
 import {
   GENERATED_IMAGES,
@@ -230,6 +243,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newNeighborhoodCity, setNewNeighborhoodCity] = useState<'Cuiabá' | 'Várzea Grande'>('Várzea Grande');
   const [newNeighborhoodFee, setNewNeighborhoodFee] = useState('8.00');
 
+  // Kanban & Order History Filter + Undo State
+  const [kanbanViewMode, setKanbanViewMode] = useState<'board' | 'history_table'>('board');
+  const [kanbanSearchQuery, setKanbanSearchQuery] = useState('');
+  const [kanbanDatePreset, setKanbanDatePreset] = useState<OrderDatePreset>('all');
+  const [kanbanStartDate, setKanbanStartDate] = useState('');
+  const [kanbanEndDate, setKanbanEndDate] = useState('');
+  const [kanbanDeliveryFilter, setKanbanDeliveryFilter] = useState<'all' | DeliveryType>('all');
+  const [expandedHistoryOrderId, setExpandedHistoryOrderId] = useState<string | null>(null);
+  const [lastStatusMove, setLastStatusMove] = useState<{
+    orderId: string;
+    customerName: string;
+    fromStatus: OrderStatus;
+    toStatus: OrderStatus;
+  } | null>(null);
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (
@@ -244,11 +272,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleMoveOrderStatus = (orderId: string, nextStatus: OrderStatus) => {
+  const handleMoveOrderStatus = (
+    orderId: string,
+    nextStatus: OrderStatus,
+    customReason?: string
+  ) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder || targetOrder.status === nextStatus) return;
+
+    const fromStatus = targetOrder.status;
+    setLastStatusMove({
+      orderId: targetOrder.id,
+      customerName: targetOrder.customerName,
+      fromStatus,
+      toStatus: nextStatus,
+    });
+
     const updated = orders.map((o) =>
-      o.id === orderId ? { ...o, status: nextStatus } : o
+      o.id === orderId ? transitionOrderStatus(o, nextStatus, customReason) : o
     );
     onSaveOrders(updated);
+  };
+
+  const handleUndoLastStatusMove = () => {
+    if (!lastStatusMove) return;
+    const { orderId, fromStatus } = lastStatusMove;
+    const updated = orders.map((o) =>
+      o.id === orderId
+        ? transitionOrderStatus(
+            o,
+            fromStatus,
+            'Desfeito pelo operador (correção de falha humana)'
+          )
+        : o
+    );
+    onSaveOrders(updated);
+    setLastStatusMove(null);
   };
 
   const handleCreatePosOrder = (e: React.FormEvent) => {
@@ -1320,329 +1379,971 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* TAB 1: KANBAN DE SEPARAÇÃO DE PEDIDOS + LANÇAMENTO PDV BALCÃO */}
-          {activeTab === 'kanban' && (
-            <div className="space-y-4 no-print">
-              <div className="bg-white rounded-2xl border border-zinc-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-display text-lg font-extrabold text-zinc-900">
-                    Quadro Operacional de Separação & Retirada Expressa
-                  </h2>
-                  <p className="text-xs text-zinc-500">
-                    Avance os pedidos conforme os galões forem lacrados, lance vendas de balcão (PDV) ou exporte relatórios em planilha.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsManualPosOpen((prev) => !prev)}
-                    className="px-3.5 py-2 bg-[#E3262E] hover:bg-[#C81E25] text-white font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  >
-                    <ShoppingBag className="w-4 h-4" />
-                    <span>{isManualPosOpen ? 'Fechar PDV Balcão' : '+ Pedido Balcão / PDV'}</span>
-                  </button>
+          {/* TAB 1: KANBAN DE SEPARAÇÃO DE PEDIDOS + REVERSÃO DE ETAPAS + FILTRO DE DATAS E HISTÓRICO */}
+          {activeTab === 'kanban' && (() => {
+            const filteredKanbanOrders = filterOrdersByCriteria(orders, {
+              searchQuery: kanbanSearchQuery,
+              datePreset: kanbanDatePreset,
+              startDate: kanbanStartDate,
+              endDate: kanbanEndDate,
+              deliveryType: kanbanDeliveryFilter,
+            });
+            const periodSummary = summarizeOrdersPeriod(filteredKanbanOrders);
+            const distinctDates = Array.from(
+              new Set(orders.map((o) => toDateKeyYmd(o.createdAt)).filter(Boolean))
+            ).sort((a, b) => b.localeCompare(a));
 
-                  <button
-                    type="button"
-                    onClick={handleExportOrdersCsv}
-                    className="px-3.5 py-2 bg-[#FAFAFA] hover:bg-zinc-100 border border-zinc-300 text-zinc-800 font-bold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5 text-[#D97706]" />
-                    <span>Exportar Pedidos (CSV)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('kits');
-                      openCreateKit();
-                    }}
-                    className="px-3.5 py-2 bg-[#FFFBEB] hover:bg-[#FFBE00]/40 border border-[#FFBE00] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Gift className="w-4 h-4 text-[#E3262E]" />
-                    <span>+ Cadastrar Kit</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('products');
-                      openCreateProduct();
-                    }}
-                    className="px-3.5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Cadastrar Produto</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* PDV / Manual Walk-In & Phone Order Form */}
-              {isManualPosOpen && (
-                <form
-                  onSubmit={handleCreatePosOrder}
-                  className="bg-white rounded-2xl border-2 border-[#FFBE00] p-5 shadow-md space-y-4"
-                >
-                  <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-                    <div>
-                      <span className="text-[10px] font-mono uppercase font-extrabold text-[#E3262E]">
-                        PDV RÁPIDO · ATENDIMENTO PRESENCIAL OU TELEFONE (65) 3029-6824
+            return (
+              <div className="space-y-4 no-print">
+                {/* Top Header & Primary Actions */}
+                <div className="bg-white rounded-2xl border border-zinc-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="font-display text-lg font-extrabold text-zinc-900">
+                        Quadro Operacional de Separação, Retirada & Histórico
+                      </h2>
+                      <span className="px-2 py-0.5 rounded-md bg-[#FFFBEB] border border-[#FDE68A] font-mono text-[10px] font-extrabold text-[#B45309]">
+                        REVERSÃO DE ETAPAS & AUDITORIA ATIVA
                       </span>
-                      <h3 className="font-display text-base font-extrabold text-zinc-900">
-                        Lançar Pedido de Balcão / Telefone (Gera Comanda Automática)
-                      </h3>
                     </div>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      Avance ou volte etapas a qualquer momento (inclusive de pedidos já concluídos), consulte datas anteriores e audite o histórico de cada pedido.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setIsManualPosOpen(false)}
-                      className="text-zinc-400 hover:text-zinc-700 cursor-pointer"
+                      onClick={() => setIsManualPosOpen((prev) => !prev)}
+                      className="px-3.5 py-2 bg-[#E3262E] hover:bg-[#C81E25] text-white font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
                     >
-                      <X className="w-5 h-5" />
+                      <ShoppingBag className="w-4 h-4" />
+                      <span>{isManualPosOpen ? 'Fechar PDV Balcão' : '+ Pedido Balcão / PDV'}</span>
                     </button>
-                  </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-700 mb-1">
-                        Nome do Cliente / Empresa
-                      </label>
-                      <input
-                        type="text"
-                        value={posCustomerName}
-                        onChange={(e) => setPosCustomerName(e.target.value)}
-                        placeholder="Ex: Condomínio Solar / Balcão"
-                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-700 mb-1">
-                        WhatsApp / Telefone
-                      </label>
-                      <input
-                        type="tel"
-                        value={posCustomerPhone}
-                        onChange={(e) => setPosCustomerPhone(formatPhone(e.target.value))}
-                        placeholder="(65) 99999-9999"
-                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-700 mb-1">
-                        Modalidade
-                      </label>
-                      <select
-                        value={posDeliveryType}
-                        onChange={(e) => setPosDeliveryType(e.target.value as DeliveryType)}
-                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold"
-                      >
-                        <option value="pickup">Retirada Balcão (15min)</option>
-                        <option value="delivery">Entrega Delivery Local</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-700 mb-1">
-                        Pagamento
-                      </label>
-                      <select
-                        value={posPaymentMethod}
-                        onChange={(e) => setPosPaymentMethod(e.target.value as PaymentMethod)}
-                        className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold"
-                      >
-                        <option value="pix">PIX na Loja</option>
-                        <option value="card">Cartão (Maquininha)</option>
-                        <option value="cash">Dinheiro no Caixa</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="max-h-48 overflow-y-auto border border-zinc-200 rounded-xl divide-y divide-zinc-100 bg-[#FAFAFA] p-2">
-                    {products
-                      .filter((p) => p.status === 'active')
-                      .slice(0, 10)
-                      .map((p) => {
-                        const qty = posQuantities[p.id] || 0;
-                        return (
-                          <div
-                            key={`pos-${p.id}`}
-                            className="py-1.5 px-2 flex items-center justify-between gap-2 text-xs"
-                          >
-                            <div className="truncate">
-                              <strong className="text-zinc-900">{p.title}</strong>{' '}
-                              <span className="font-mono text-zinc-500">
-                                ({p.volumeLabel} · {formatCurrency(getEffectivePrice(p))})
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setPosQuantities((prev) => ({
-                                    ...prev,
-                                    [p.id]: Math.max(0, (prev[p.id] || 0) - 1),
-                                  }))
-                                }
-                                className="w-6 h-6 rounded-md bg-white border border-zinc-300 font-bold cursor-pointer"
-                              >
-                                -
-                              </button>
-                              <span className="font-mono font-extrabold w-5 text-center">
-                                {qty}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setPosQuantities((prev) => ({
-                                    ...prev,
-                                    [p.id]: (prev[p.id] || 0) + 1,
-                                  }))
-                                }
-                                className="w-6 h-6 rounded-md bg-[#FFBE00] text-zinc-950 font-bold cursor-pointer"
-                              >
-                                +
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2">
                     <button
                       type="button"
-                      onClick={() => setIsManualPosOpen(false)}
-                      className="px-4 py-2 bg-zinc-100 text-zinc-700 font-bold text-xs rounded-xl cursor-pointer"
+                      onClick={handleExportOrdersCsv}
+                      className="px-3.5 py-2 bg-[#FAFAFA] hover:bg-zinc-100 border border-zinc-300 text-zinc-800 font-bold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
                     >
-                      Cancelar
+                      <Download className="w-3.5 h-3.5 text-[#D97706]" />
+                      <span>Exportar Pedidos (CSV)</span>
                     </button>
+
                     <button
-                      type="submit"
-                      className="px-5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer"
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('kits');
+                        openCreateKit();
+                      }}
+                      className="px-3.5 py-2 bg-[#FFFBEB] hover:bg-[#FFBE00]/40 border border-[#FFBE00] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
                     >
-                      Gerar Pedido & Abrir Comanda de Separação
+                      <Gift className="w-4 h-4 text-[#E3262E]" />
+                      <span>+ Cadastrar Kit</span>
                     </button>
                   </div>
-                </form>
-              )}
+                </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5">
-                {KANBAN_COLUMNS.map((statusKey) => {
-                  const colMeta = ORDER_STATUS_META[statusKey];
-                  const colOrders = orders.filter((o) => o.status === statusKey);
-
-                  return (
-                    <div
-                      key={statusKey}
-                      className="bg-white rounded-2xl p-3.5 border border-zinc-200 flex flex-col min-h-[420px] shadow-2xs"
-                    >
-                      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-200">
-                        <h3 className="font-display text-xs font-extrabold text-zinc-900">
-                          {colMeta.label}
-                        </h3>
-                        <span className="px-2 py-0.5 rounded-full bg-[#FFFBEB] border border-[#FDE68A] font-mono text-xs font-extrabold text-[#B45309] tabular-nums">
-                          {colOrders.length}
+                {/* HUMAN ERROR UNDO BANNER ("Errou a etapa sem querer? Desfaça com 1 clique") */}
+                {lastStatusMove && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="bg-[#FFFBEB] border-2 border-[#FFBE00] rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+                  >
+                    <div className="flex items-start sm:items-center gap-2.5 text-xs">
+                      <div className="w-8 h-8 rounded-xl bg-[#E3262E] text-white flex items-center justify-center shrink-0">
+                        <RotateCcw className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="font-mono text-[10px] uppercase font-extrabold text-[#E3262E] block">
+                          PROTEÇÃO CONTRA FALHA HUMANA · ÚLTIMA MOVIMENTAÇÃO
+                        </span>
+                        <span className="text-zinc-900">
+                          Pedido <strong className="font-mono">{lastStatusMove.orderId}</strong> ({lastStatusMove.customerName}) movido de{' '}
+                          <strong>{ORDER_STATUS_META[lastStatusMove.fromStatus].shortLabel}</strong> para{' '}
+                          <strong className="text-[#E3262E]">
+                            {ORDER_STATUS_META[lastStatusMove.toStatus].shortLabel}
+                          </strong>.
                         </span>
                       </div>
+                    </div>
 
-                      <div className="space-y-3 flex-1">
-                        {colOrders.length === 0 ? (
-                          <div className="h-32 rounded-xl border border-dashed border-zinc-200 flex items-center justify-center text-xs text-zinc-400">
-                            Sem pedidos nesta etapa
-                          </div>
-                        ) : (
-                          colOrders.map((order) => {
-                            const currentIdx = KANBAN_COLUMNS.indexOf(order.status);
-                            const nextStatus =
-                              currentIdx < KANBAN_COLUMNS.length - 1
-                                ? KANBAN_COLUMNS[currentIdx + 1]
-                                : null;
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleUndoLastStatusMove}
+                        className="px-3.5 py-2 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>
+                          Desfazer e Voltar p/ {ORDER_STATUS_META[lastStatusMove.fromStatus].shortLabel}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLastStatusMove(null)}
+                        aria-label="Ocultar aviso de desfazer"
+                        className="p-1.5 rounded-lg text-zinc-500 hover:bg-amber-200/50 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
+                {/* FILTER & HISTORICAL DATE CONSULTATION BAR ("Consultar uma data anterior / Filtrar histórico do Kanban") */}
+                <div className="bg-white rounded-2xl border border-zinc-200 p-4 space-y-3.5 shadow-2xs">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    {/* Search Input */}
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 text-[#E3262E] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="search"
+                        value={kanbanSearchQuery}
+                        onChange={(e) => setKanbanSearchQuery(e.target.value)}
+                        placeholder="Buscar no Kanban por Nº (#LMP-1041), Cliente, WhatsApp, Senha ou Produto..."
+                        className="w-full pl-9 pr-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-medium text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Modality Filter Pills */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { id: 'all' as const, label: 'Todas Modalidades' },
+                        { id: 'pickup' as const, label: '🏪 Retirada na Loja' },
+                        { id: 'delivery' as const, label: '🚚 Entrega Delivery' },
+                      ].map((mod) => (
+                        <button
+                          key={mod.id}
+                          type="button"
+                          onClick={() => setKanbanDeliveryFilter(mod.id)}
+                          className={`px-3 py-2 rounded-xl text-xs font-extrabold border transition-all cursor-pointer ${
+                            kanbanDeliveryFilter === mod.id
+                              ? 'bg-[#FFFBEB] border-[#FFBE00] text-zinc-950 shadow-2xs'
+                              : 'bg-[#FAFAFA] hover:bg-zinc-100 border-zinc-200 text-zinc-600'
+                          }`}
+                        >
+                          {mod.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* View Mode Switcher: Quadro Kanban vs Histórico Cronológico */}
+                    <div className="inline-flex rounded-xl bg-[#FAFAFA] p-1 border border-zinc-200 self-start lg:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setKanbanViewMode('board')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+                          kanbanViewMode === 'board'
+                            ? 'bg-zinc-950 text-[#FFBE00] shadow-2xs'
+                            : 'text-zinc-600 hover:text-zinc-900'
+                        }`}
+                      >
+                        <FolderKanban className="w-3.5 h-3.5" />
+                        <span>Quadro Kanban (4 Colunas)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setKanbanViewMode('history_table')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+                          kanbanViewMode === 'history_table'
+                            ? 'bg-zinc-950 text-[#FFBE00] shadow-2xs'
+                            : 'text-zinc-600 hover:text-zinc-900'
+                        }`}
+                      >
+                        <History className="w-3.5 h-3.5" />
+                        <span>Histórico & Auditoria ({filteredKanbanOrders.length})</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Date / Period Filter Row + Calendar Date Picker */}
+                  <div className="pt-3 border-t border-zinc-100 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-zinc-800 mr-1">
+                        <Calendar className="w-3.5 h-3.5 text-[#E3262E]" />
+                        <span>Período / Data:</span>
+                      </span>
+                      {[
+                        { id: 'all' as OrderDatePreset, label: 'Todas as Datas' },
+                        { id: 'today' as OrderDatePreset, label: 'Hoje' },
+                        { id: 'last_7_days' as OrderDatePreset, label: 'Últimos 7 Dias' },
+                        { id: 'last_30_days' as OrderDatePreset, label: 'Últimos 30 Dias' },
+                        { id: 'custom' as OrderDatePreset, label: 'Escolher Data Específica' },
+                      ].map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => {
+                            setKanbanDatePreset(preset.id);
+                            if (preset.id !== 'custom') {
+                              setKanbanStartDate('');
+                              setKanbanEndDate('');
+                            }
+                          }}
+                          className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                            kanbanDatePreset === preset.id
+                              ? 'bg-[#E3262E] border-[#E3262E] text-white font-extrabold'
+                              : 'bg-[#FAFAFA] hover:bg-zinc-100 border-zinc-200 text-zinc-700'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+
+                      {/* Quick Date Chips for Existing Order Dates ("Consultar uma data anterior") */}
+                      {distinctDates.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 pl-1">
+                          <span className="text-[10px] font-mono text-zinc-400">
+                            Datas c/ pedidos:
+                          </span>
+                          {distinctDates.map((ymd) => {
+                            const [yyyy, mm, dd] = ymd.split('-');
+                            const isSelectedDate =
+                              kanbanDatePreset === 'custom' &&
+                              kanbanStartDate === ymd &&
+                              kanbanEndDate === ymd;
                             return (
-                              <article
-                                key={order.id}
-                                className="bg-[#FAFAFA] rounded-xl p-3.5 border border-zinc-200/90 space-y-2.5"
+                              <button
+                                key={`date-chip-${ymd}`}
+                                type="button"
+                                onClick={() => {
+                                  setKanbanDatePreset('custom');
+                                  setKanbanStartDate(ymd);
+                                  setKanbanEndDate(ymd);
+                                }}
+                                className={`px-2 py-1 rounded-lg font-mono text-[10px] font-extrabold border transition-colors cursor-pointer ${
+                                  isSelectedDate
+                                    ? 'bg-zinc-950 text-[#FFBE00] border-zinc-950'
+                                    : 'bg-white hover:bg-[#FFFBEB] text-zinc-700 border-zinc-200'
+                                }`}
                               >
-                                <div className="flex items-center justify-between text-xs">
-                                  <span className="font-mono font-extrabold text-zinc-900">
-                                    {order.id}
-                                  </span>
-                                  <span className="font-mono font-extrabold text-zinc-900 tabular-nums">
-                                    {formatCurrency(order.total)}
-                                  </span>
-                                </div>
-
-                                <div className="text-xs">
-                                  <div className="font-bold text-zinc-900">
-                                    {order.customerName}
-                                  </div>
-                                  <div className="font-mono text-zinc-500 text-[11px]">
-                                    {formatPhone(order.customerPhone)} ·{' '}
-                                    <strong className="text-[#E3262E]">
-                                      {order.deliveryType === 'delivery' ? 'Delivery' : 'Retirada 15min'}
-                                    </strong>
-                                  </div>
-                                </div>
-
-                                <div className="text-[11px] text-zinc-700 space-y-1 bg-white p-2.5 rounded-lg border border-zinc-200/70">
-                                  {order.items.map((item, idx) => (
-                                    <div
-                                      key={`${order.id}-${idx}`}
-                                      className="flex justify-between gap-2"
-                                    >
-                                      <span className="truncate">
-                                        <strong className="font-mono">{item.quantity}x</strong>{' '}
-                                        {item.title}
-                                      </span>
-                                      <span className="font-mono shrink-0">{item.volumeLabel}</span>
-                                    </div>
-                                  ))}
-                                </div>
-
-                                <div className="pt-2 border-t border-zinc-200/60 flex flex-wrap items-center justify-between gap-1.5">
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => setPrintOrder(order)}
-                                      aria-label={`Imprimir comanda do pedido ${order.id}`}
-                                      className="px-2 py-1.5 bg-white hover:bg-zinc-100 border border-zinc-300 text-zinc-900 text-[11px] font-bold rounded-lg inline-flex items-center gap-1 cursor-pointer"
-                                    >
-                                      <Printer className="w-3 h-3" />
-                                      <span>Comanda</span>
-                                    </button>
-
-                                    <a
-                                      href={buildCustomerWhatsAppStatusUrl(order)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title="Avisar cliente no WhatsApp"
-                                      className="px-2 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-bold rounded-lg inline-flex items-center gap-1"
-                                    >
-                                      <MessageCircle className="w-3 h-3" />
-                                      <span>Avisar</span>
-                                    </a>
-                                  </div>
-
-                                  {nextStatus && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleMoveOrderStatus(order.id, nextStatus)}
-                                      className="px-2.5 py-1.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 text-[11px] font-extrabold rounded-lg inline-flex items-center gap-1 cursor-pointer"
-                                    >
-                                      <span>Avançar</span>
-                                      <ArrowRight className="w-3 h-3" />
-                                    </button>
-                                  )}
-                                </div>
-                              </article>
+                                {dd}/{mm}/{yyyy}
+                              </button>
                             );
-                          })
-                        )}
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Custom Calendar Date Inputs (De / Até) */}
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <label
+                          htmlFor="kanban-start-date"
+                          className="text-[11px] font-bold text-zinc-600"
+                        >
+                          De:
+                        </label>
+                        <input
+                          id="kanban-start-date"
+                          type="date"
+                          value={kanbanStartDate}
+                          onChange={(e) => {
+                            setKanbanDatePreset('custom');
+                            setKanbanStartDate(e.target.value);
+                          }}
+                          className="px-2.5 py-1.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono text-zinc-900 focus:border-[#FFBE00] focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <label
+                          htmlFor="kanban-end-date"
+                          className="text-[11px] font-bold text-zinc-600"
+                        >
+                          Até:
+                        </label>
+                        <input
+                          id="kanban-end-date"
+                          type="date"
+                          value={kanbanEndDate}
+                          onChange={(e) => {
+                            setKanbanDatePreset('custom');
+                            setKanbanEndDate(e.target.value);
+                          }}
+                          className="px-2.5 py-1.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono text-zinc-900 focus:border-[#FFBE00] focus:outline-none"
+                        />
+                      </div>
+
+                      {(kanbanSearchQuery ||
+                        kanbanDatePreset !== 'all' ||
+                        kanbanStartDate ||
+                        kanbanEndDate ||
+                        kanbanDeliveryFilter !== 'all') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setKanbanSearchQuery('');
+                            setKanbanDatePreset('all');
+                            setKanbanStartDate('');
+                            setKanbanEndDate('');
+                            setKanbanDeliveryFilter('all');
+                          }}
+                          className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-[#E3262E] text-[11px] font-extrabold cursor-pointer"
+                        >
+                          Limpar Filtro
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Period Financial & Operational Metrics Strip */}
+                  <div className="pt-2.5 border-t border-zinc-100 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                    <div className="p-2.5 rounded-xl bg-[#FAFAFA] border border-zinc-200/80 flex items-center justify-between">
+                      <span className="text-zinc-500 font-semibold">Pedidos no Filtro:</span>
+                      <strong className="font-mono text-sm font-extrabold text-zinc-950">
+                        {periodSummary.totalOrders} pedido(s)
+                      </strong>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-[#FFFBEB]/70 border border-[#FDE68A] flex items-center justify-between">
+                      <span className="text-zinc-700 font-semibold">Volume Filtrado:</span>
+                      <strong className="font-mono text-sm font-extrabold text-zinc-950">
+                        {formatCurrency(periodSummary.totalRevenue)}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-[#FAFAFA] border border-zinc-200/80 flex items-center justify-between">
+                      <span className="text-zinc-500 font-semibold">Modalidades:</span>
+                      <strong className="font-mono text-xs font-extrabold text-zinc-900">
+                        {periodSummary.pickupCount} Loja · {periodSummary.deliveryCount} Delivery
+                      </strong>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-[#FAFAFA] border border-zinc-200/80 flex items-center justify-between">
+                      <span className="text-zinc-500 font-semibold">Ticket Médio:</span>
+                      <strong className="font-mono text-sm font-extrabold text-emerald-700">
+                        {formatCurrency(periodSummary.averageTicket)}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* PDV / Manual Walk-In & Phone Order Form */}
+                {isManualPosOpen && (
+                  <form
+                    onSubmit={handleCreatePosOrder}
+                    className="bg-white rounded-2xl border-2 border-[#FFBE00] p-5 shadow-md space-y-4"
+                  >
+                    <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+                      <div>
+                        <span className="text-[10px] font-mono uppercase font-extrabold text-[#E3262E]">
+                          PDV RÁPIDO · ATENDIMENTO PRESENCIAL OU TELEFONE (65) 3029-6824
+                        </span>
+                        <h3 className="font-display text-base font-extrabold text-zinc-900">
+                          Lançar Pedido de Balcão / Telefone (Gera Comanda Automática)
+                        </h3>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsManualPosOpen(false)}
+                        className="text-zinc-400 hover:text-zinc-700 cursor-pointer"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Nome do Cliente / Empresa
+                        </label>
+                        <input
+                          type="text"
+                          value={posCustomerName}
+                          onChange={(e) => setPosCustomerName(e.target.value)}
+                          placeholder="Ex: Condomínio Solar / Balcão"
+                          className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          WhatsApp / Telefone
+                        </label>
+                        <input
+                          type="tel"
+                          value={posCustomerPhone}
+                          onChange={(e) => setPosCustomerPhone(formatPhone(e.target.value))}
+                          placeholder="(65) 99999-9999"
+                          className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Modalidade
+                        </label>
+                        <select
+                          value={posDeliveryType}
+                          onChange={(e) => setPosDeliveryType(e.target.value as DeliveryType)}
+                          className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold"
+                        >
+                          <option value="pickup">Retirada Balcão (15min)</option>
+                          <option value="delivery">Entrega Delivery Local</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Pagamento
+                        </label>
+                        <select
+                          value={posPaymentMethod}
+                          onChange={(e) => setPosPaymentMethod(e.target.value as PaymentMethod)}
+                          className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold"
+                        >
+                          <option value="pix">PIX na Loja</option>
+                          <option value="card">Cartão (Maquininha)</option>
+                          <option value="cash">Dinheiro no Caixa</option>
+                        </select>
                       </div>
                     </div>
-                  );
-                })}
+
+                    <div className="max-h-48 overflow-y-auto border border-zinc-200 rounded-xl divide-y divide-zinc-100 bg-[#FAFAFA] p-2">
+                      {products
+                        .filter((p) => p.status === 'active')
+                        .slice(0, 10)
+                        .map((p) => {
+                          const qty = posQuantities[p.id] || 0;
+                          return (
+                            <div
+                              key={`pos-${p.id}`}
+                              className="py-1.5 px-2 flex items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="truncate">
+                                <strong className="text-zinc-900">{p.title}</strong>{' '}
+                                <span className="font-mono text-zinc-500">
+                                  ({p.volumeLabel} · {formatCurrency(getEffectivePrice(p))})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPosQuantities((prev) => ({
+                                      ...prev,
+                                      [p.id]: Math.max(0, (prev[p.id] || 0) - 1),
+                                    }))
+                                  }
+                                  className="w-6 h-6 rounded-md bg-white border border-zinc-300 font-bold cursor-pointer"
+                                >
+                                  -
+                                </button>
+                                <span className="font-mono font-extrabold w-5 text-center">
+                                  {qty}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPosQuantities((prev) => ({
+                                      ...prev,
+                                      [p.id]: (prev[p.id] || 0) + 1,
+                                    }))
+                                  }
+                                  className="w-6 h-6 rounded-md bg-[#FFBE00] text-zinc-950 font-bold cursor-pointer"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsManualPosOpen(false)}
+                        className="px-4 py-2 bg-zinc-100 text-zinc-700 font-bold text-xs rounded-xl cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer"
+                      >
+                        Gerar Pedido & Abrir Comanda de Separação
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* VIEW 1: 4-COLUMN KANBAN BOARD WITH BIDIRECTIONAL STAGE REVERSAL (VOLTAR & AVANÇAR + SELETOR DIRETO 1..4) */}
+                {kanbanViewMode === 'board' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5">
+                    {KANBAN_COLUMNS.map((statusKey, colIdx) => {
+                      const colMeta = ORDER_STATUS_META[statusKey];
+                      const colOrders = filteredKanbanOrders.filter(
+                        (o) => o.status === statusKey
+                      );
+
+                      return (
+                        <div
+                          key={statusKey}
+                          className="bg-white rounded-2xl p-3.5 border border-zinc-200 flex flex-col min-h-[440px] shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-200">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-md bg-zinc-950 text-[#FFBE00] font-mono text-[10px] font-extrabold flex items-center justify-center">
+                                {colIdx + 1}
+                              </span>
+                              <h3 className="font-display text-xs font-extrabold text-zinc-900">
+                                {colMeta.label}
+                              </h3>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full bg-[#FFFBEB] border border-[#FDE68A] font-mono text-xs font-extrabold text-[#B45309] tabular-nums">
+                              {colOrders.length}
+                            </span>
+                          </div>
+
+                          <div className="space-y-3 flex-1">
+                            {colOrders.length === 0 ? (
+                              <div className="h-32 rounded-xl border border-dashed border-zinc-200 flex items-center justify-center text-xs text-zinc-400 text-center px-3">
+                                Sem pedidos nesta etapa para o período selecionado
+                              </div>
+                            ) : (
+                              colOrders.map((order) => {
+                                const prevStatus = getAdjacentOrderStatus(
+                                  order.status,
+                                  'prev'
+                                );
+                                const nextStatus = getAdjacentOrderStatus(
+                                  order.status,
+                                  'next'
+                                );
+                                const orderDateFormatted = new Date(
+                                  order.createdAt
+                                ).toLocaleDateString('pt-BR', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                });
+                                const isHistoryExpanded =
+                                  expandedHistoryOrderId === order.id;
+
+                                return (
+                                  <article
+                                    key={order.id}
+                                    className="bg-[#FAFAFA] rounded-xl p-3.5 border border-zinc-200/90 space-y-2.5 hover:border-[#FFBE00] transition-colors"
+                                  >
+                                    {/* Top Row: ID + Date + Total */}
+                                    <div className="flex items-center justify-between gap-2 text-xs">
+                                      <div>
+                                        <span className="font-mono font-extrabold text-zinc-950">
+                                          {order.id}
+                                        </span>
+                                        <span className="block font-mono text-[10px] text-zinc-500">
+                                          {orderDateFormatted}
+                                        </span>
+                                      </div>
+                                      <span className="font-mono font-extrabold text-zinc-950 tabular-nums text-sm">
+                                        {formatCurrency(order.total)}
+                                      </span>
+                                    </div>
+
+                                    {/* Customer & Modality */}
+                                    <div className="text-xs">
+                                      <div className="font-bold text-zinc-900">
+                                        {order.customerName}
+                                      </div>
+                                      <div className="font-mono text-zinc-500 text-[11px] flex flex-wrap items-center gap-1 mt-0.5">
+                                        <span>{formatPhone(order.customerPhone)}</span>
+                                        <span>·</span>
+                                        <strong
+                                          className={
+                                            order.deliveryType === 'pickup'
+                                              ? 'text-emerald-700'
+                                              : 'text-[#E3262E]'
+                                          }
+                                        >
+                                          {order.deliveryType === 'delivery'
+                                            ? '🚚 Delivery'
+                                            : '🏪 Retirada 15min'}
+                                        </strong>
+                                        {order.pickupCode && (
+                                          <span className="px-1.5 py-0.2 rounded bg-zinc-200/80 text-zinc-800 text-[9px] font-extrabold">
+                                            {order.pickupCode}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Items List */}
+                                    <div className="text-[11px] text-zinc-700 space-y-1 bg-white p-2.5 rounded-lg border border-zinc-200/70">
+                                      {order.items.map((item, idx) => (
+                                        <div
+                                          key={`${order.id}-${idx}`}
+                                          className="flex justify-between gap-2"
+                                        >
+                                          <span className="truncate">
+                                            <strong className="font-mono">
+                                              {item.quantity}x
+                                            </strong>{' '}
+                                            {item.title}
+                                          </span>
+                                          <span className="font-mono shrink-0">
+                                            {item.volumeLabel}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+
+                                    {/* DIRECT 4-STAGE QUICK JUMP PILLS ("Ir direto p/ etapa correta se passou todas sem querer") */}
+                                    <div className="bg-white rounded-lg p-1.5 border border-zinc-200/80 space-y-1">
+                                      <div className="flex items-center justify-between text-[9px] font-mono uppercase text-zinc-500 font-bold px-0.5">
+                                        <span>Mudar Etapa Direto:</span>
+                                        {(order.statusHistory?.length || 0) > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setExpandedHistoryOrderId(
+                                                isHistoryExpanded ? null : order.id
+                                              )
+                                            }
+                                            className="text-[#E3262E] hover:underline cursor-pointer"
+                                          >
+                                            {isHistoryExpanded
+                                              ? 'Ocultar Log'
+                                              : `Log (${order.statusHistory?.length})`}
+                                          </button>
+                                        )}
+                                      </div>
+                                      <div className="grid grid-cols-4 gap-1">
+                                        {[
+                                          { st: 'pending_separation' as OrderStatus, label: '1. Novo' },
+                                          { st: 'separating' as OrderStatus, label: '2. Sep.' },
+                                          { st: 'ready_or_out' as OrderStatus, label: '3. Pronto' },
+                                          { st: 'completed' as OrderStatus, label: '4. Fim' },
+                                        ].map((stepBtn) => {
+                                          const isCurrent = order.status === stepBtn.st;
+                                          return (
+                                            <button
+                                              key={`${order.id}-jump-${stepBtn.st}`}
+                                              type="button"
+                                              onClick={() =>
+                                                handleMoveOrderStatus(
+                                                  order.id,
+                                                  stepBtn.st,
+                                                  `Movido direto para ${ORDER_STATUS_META[stepBtn.st].shortLabel}`
+                                                )
+                                              }
+                                              title={`Mover pedido ${order.id} para ${ORDER_STATUS_META[stepBtn.st].label}`}
+                                              className={`py-1 rounded text-[10px] font-mono font-extrabold transition-colors cursor-pointer ${
+                                                isCurrent
+                                                  ? 'bg-zinc-950 text-[#FFBE00]'
+                                                  : 'bg-zinc-100 hover:bg-[#FFFBEB] text-zinc-700 border border-zinc-200'
+                                              }`}
+                                            >
+                                              {stepBtn.label}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+
+                                    {/* Collapsible Audit History Log per Card */}
+                                    {isHistoryExpanded &&
+                                      order.statusHistory &&
+                                      order.statusHistory.length > 0 && (
+                                        <div className="p-2 rounded-lg bg-[#FFFBEB] border border-[#FDE68A] space-y-1 text-[10px]">
+                                          <div className="font-mono font-extrabold text-zinc-900 uppercase">
+                                            Histórico de Movimentações:
+                                          </div>
+                                          {order.statusHistory.slice(0, 4).map((h, hIdx) => (
+                                            <div
+                                              key={`${order.id}-hist-${hIdx}`}
+                                              className="text-zinc-700 leading-tight border-t border-amber-200/60 pt-1"
+                                            >
+                                              <span className="font-mono text-zinc-500">
+                                                {new Date(h.changedAt).toLocaleTimeString(
+                                                  'pt-BR',
+                                                  {
+                                                    hour: '2-digit',
+                                                    minute: '2-digit',
+                                                  }
+                                                )}
+                                              </span>{' '}
+                                              ·{' '}
+                                              <strong>
+                                                {ORDER_STATUS_META[h.fromStatus].shortLabel}
+                                              </strong>{' '}
+                                              →{' '}
+                                              <strong className="text-[#E3262E]">
+                                                {ORDER_STATUS_META[h.toStatus].shortLabel}
+                                              </strong>
+                                              {h.reason && (
+                                                <span className="block text-[9px] text-zinc-500">
+                                                  {h.reason}
+                                                </span>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+
+                                    {/* Action Bar: Comanda + Avisar + Bidirectional <- Voltar & Avançar -> */}
+                                    <div className="pt-2 border-t border-zinc-200/60 space-y-2">
+                                      <div className="flex items-center justify-between gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setPrintOrder(order)}
+                                          aria-label={`Imprimir comanda do pedido ${order.id}`}
+                                          className="flex-1 py-1.5 px-2 bg-white hover:bg-zinc-100 border border-zinc-300 text-zinc-900 text-[11px] font-bold rounded-lg inline-flex items-center justify-center gap-1 cursor-pointer"
+                                        >
+                                          <Printer className="w-3 h-3" />
+                                          <span>Comanda</span>
+                                        </button>
+
+                                        <a
+                                          href={buildCustomerWhatsAppStatusUrl(order)}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          title="Avisar cliente no WhatsApp"
+                                          className="flex-1 py-1.5 px-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-bold rounded-lg inline-flex items-center justify-center gap-1"
+                                        >
+                                          <MessageCircle className="w-3 h-3" />
+                                          <span>Avisar</span>
+                                        </a>
+                                      </div>
+
+                                      <div className="flex items-center justify-between gap-1.5">
+                                        {prevStatus && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleMoveOrderStatus(
+                                                order.id,
+                                                prevStatus,
+                                                'Voltou etapa anterior (correção operacional)'
+                                              )
+                                            }
+                                            title={`Voltar para ${ORDER_STATUS_META[prevStatus].label}`}
+                                            className="flex-1 py-1.5 px-2 bg-white hover:bg-rose-50 border border-zinc-300 hover:border-[#E3262E] text-zinc-800 hover:text-[#E3262E] text-[11px] font-extrabold rounded-lg inline-flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                                          >
+                                            <ArrowLeft className="w-3 h-3" />
+                                            <span>
+                                              {order.status === 'completed'
+                                                ? 'Voltar Etapa'
+                                                : 'Voltar'}
+                                            </span>
+                                          </button>
+                                        )}
+
+                                        {nextStatus && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleMoveOrderStatus(
+                                                order.id,
+                                                nextStatus,
+                                                'Avanço operacional no Kanban'
+                                              )
+                                            }
+                                            className="flex-1 py-1.5 px-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 text-[11px] font-extrabold rounded-lg inline-flex items-center justify-center gap-1 cursor-pointer"
+                                          >
+                                            <span>Avançar</span>
+                                            <ArrowRight className="w-3 h-3" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </article>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* VIEW 2: CHRONOLOGICAL ORDER HISTORY & AUDIT TABLE ("Consultar histórico por data e corrigir etapas") */
+                  <div className="bg-white rounded-2xl border border-zinc-200 overflow-hidden shadow-2xs">
+                    <div className="p-4 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-2 bg-[#FAFAFA]">
+                      <div>
+                        <h3 className="font-display text-sm font-extrabold text-zinc-900">
+                          Relatório Cronológico & Auditoria de Etapas ({filteredKanbanOrders.length} pedidos)
+                        </h3>
+                        <p className="text-xs text-zinc-500">
+                          Consulte pedidos de qualquer data anterior, altere ou reverta a etapa diretamente no seletor e confira o horário da última movimentação.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-zinc-200 bg-white text-[11px] font-mono uppercase text-zinc-500">
+                            <th className="py-3 px-4">Pedido · Data/Hora</th>
+                            <th className="py-3 px-4">Cliente · Contato</th>
+                            <th className="py-3 px-4">Modalidade · Senha</th>
+                            <th className="py-3 px-4">Itens</th>
+                            <th className="py-3 px-4">Total</th>
+                            <th className="py-3 px-4">Etapa Atual (Reversível)</th>
+                            <th className="py-3 px-4">Última Auditoria</th>
+                            <th className="py-3 px-4 text-right">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-100 text-xs">
+                          {filteredKanbanOrders.map((ord) => {
+                            const lastAudit = ord.statusHistory?.[0];
+                            const prevSt = getAdjacentOrderStatus(ord.status, 'prev');
+                            const nextSt = getAdjacentOrderStatus(ord.status, 'next');
+
+                            return (
+                              <tr key={`table-${ord.id}`} className="hover:bg-zinc-50/80">
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <div className="font-mono font-extrabold text-zinc-950">
+                                    {ord.id}
+                                  </div>
+                                  <div className="font-mono text-[11px] text-zinc-500">
+                                    {new Date(ord.createdAt).toLocaleDateString('pt-BR', {
+                                      day: '2-digit',
+                                      month: '2-digit',
+                                      year: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="font-bold text-zinc-900">
+                                    {ord.customerName}
+                                  </div>
+                                  <div className="font-mono text-[11px] text-zinc-500">
+                                    {formatPhone(ord.customerPhone)}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded-md font-bold text-[11px] ${
+                                      ord.deliveryType === 'pickup'
+                                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                        : 'bg-rose-50 text-[#E3262E] border border-rose-200'
+                                    }`}
+                                  >
+                                    {ord.deliveryType === 'pickup'
+                                      ? '🏪 Retirada na Loja'
+                                      : '🚚 Entrega Delivery'}
+                                  </span>
+                                  {ord.pickupCode && (
+                                    <div className="font-mono text-[10px] text-zinc-500 mt-0.5">
+                                      Senha: <strong>{ord.pickupCode}</strong>
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 max-w-[220px]">
+                                  <div className="truncate font-medium text-zinc-800">
+                                    {ord.items
+                                      .map((i) => `${i.quantity}x ${i.title}`)
+                                      .join(', ')}
+                                  </div>
+                                  <div className="text-[10px] font-mono text-zinc-400">
+                                    {ord.items.reduce((a, i) => a + i.quantity, 0)} unid. ·{' '}
+                                    {formatPaymentMethodLabel(ord)}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 font-mono font-extrabold text-zinc-950 whitespace-nowrap">
+                                  {formatCurrency(ord.total)}
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-1.5">
+                                    {prevSt && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleMoveOrderStatus(
+                                            ord.id,
+                                            prevSt,
+                                            'Voltou etapa pela tabela de histórico'
+                                          )
+                                        }
+                                        title="Voltar 1 etapa"
+                                        className="p-1 rounded-lg bg-white hover:bg-rose-50 border border-zinc-300 text-zinc-700 hover:text-[#E3262E] cursor-pointer"
+                                      >
+                                        <ArrowLeft className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                    <select
+                                      aria-label={`Alterar etapa do pedido ${ord.id}`}
+                                      value={ord.status}
+                                      onChange={(e) =>
+                                        handleMoveOrderStatus(
+                                          ord.id,
+                                          e.target.value as OrderStatus,
+                                          'Alterado diretamente na tabela de histórico'
+                                        )
+                                      }
+                                      className="px-2.5 py-1.5 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] text-xs font-extrabold text-zinc-950 cursor-pointer"
+                                    >
+                                      {KANBAN_COLUMNS.map((stKey, idx) => (
+                                        <option key={stKey} value={stKey}>
+                                          {idx + 1}. {ORDER_STATUS_META[stKey].shortLabel}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    {nextSt && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleMoveOrderStatus(
+                                            ord.id,
+                                            nextSt,
+                                            'Avançou etapa pela tabela de histórico'
+                                          )
+                                        }
+                                        title="Avançar 1 etapa"
+                                        className="p-1 rounded-lg bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 cursor-pointer"
+                                      >
+                                        <ArrowRight className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 text-[11px] text-zinc-600 max-w-[200px]">
+                                  {lastAudit ? (
+                                    <div>
+                                      <span className="font-mono font-bold text-zinc-900">
+                                        {ORDER_STATUS_META[lastAudit.fromStatus].shortLabel} →{' '}
+                                        {ORDER_STATUS_META[lastAudit.toStatus].shortLabel}
+                                      </span>
+                                      <span className="block text-[10px] text-zinc-400 truncate">
+                                        {lastAudit.reason}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-zinc-400">
+                                      Aguardando 1ª movimentação
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPrintOrder(ord)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-900 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Printer className="w-3 h-3" />
+                                    <span>Comanda</span>
+                                  </button>
+                                  <a
+                                    href={buildCustomerWhatsAppStatusUrl(ord)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-[11px] inline-flex items-center gap-1"
+                                  >
+                                    <MessageCircle className="w-3 h-3" />
+                                    <span>WhatsApp</span>
+                                  </a>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* TAB 2: GESTÃO DE PRODUTOS (COM UPLOAD DE IMAGEM JPG/PNG/WEBP + LINK URL + BUSCA RÁPIDA) */}
           {activeTab === 'products' && (
@@ -2485,53 +3186,100 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                         {/* Cálculo Automático de Soma Avulsa vs Preço Promocional do Kit */}
                         {(() => {
-                          const regularTotal = Object.entries(kitQuantities).reduce(
-                            (acc, [prodId, q]) => {
-                              if (q <= 0) return acc;
-                              const p = products.find((item) => item.id === prodId);
-                              return acc + (p ? getEffectivePrice(p) * q : 0);
-                            },
-                            0
-                          );
+                          const regularTotal =
+                            Math.round(
+                              Object.entries(kitQuantities).reduce((acc, [prodId, q]) => {
+                                if (q <= 0) return acc;
+                                const p = products.find((item) => item.id === prodId);
+                                return acc + (p ? getEffectivePrice(p) * q : 0);
+                              }, 0) * 100
+                            ) / 100;
+                          const typedPromo =
+                            Math.round(
+                              (Number(kitPromoPrice.replace(',', '.')) || 0) * 100
+                            ) / 100;
+                          const finalCartKitPrice =
+                            typedPromo > 0 ? typedPromo : regularTotal;
+                          const exactSavings =
+                            Math.max(
+                              0,
+                              Math.round((regularTotal - finalCartKitPrice) * 100) / 100
+                            );
+
                           return (
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 items-end">
-                              <div className="p-2.5 rounded-xl bg-white border border-zinc-200">
-                                <span className="block text-[10px] font-mono uppercase text-zinc-500">
-                                  Soma Avulsa dos Itens
-                                </span>
-                                <strong className="font-mono text-sm font-extrabold text-zinc-700">
-                                  {formatCurrency(regularTotal)}
-                                </strong>
+                            <div className="space-y-2.5 pt-2">
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                                <div className="p-2.5 rounded-xl bg-white border border-zinc-200">
+                                  <span className="block text-[10px] font-mono uppercase text-zinc-500">
+                                    Soma Avulsa dos Itens
+                                  </span>
+                                  <strong className="font-mono text-sm font-extrabold text-zinc-700">
+                                    {formatCurrency(regularTotal)}
+                                  </strong>
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-bold text-zinc-800 mb-1">
+                                    Preço Fechado do Kit na Cesta (R$) *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={kitPromoPrice}
+                                    onChange={(e) => setKitPromoPrice(e.target.value)}
+                                    className="w-full px-3 py-2 bg-white border-2 border-[#FFBE00] rounded-xl text-xs font-mono font-extrabold text-zinc-950"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-bold text-zinc-800 mb-1">
+                                    Visibilidade do Preço
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setKitShowPrice((prev) => !prev)}
+                                    className={`w-full py-2 px-3 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                                      kitShowPrice
+                                        ? 'bg-[#FFFBEB] border-[#FFBE00] text-zinc-950'
+                                        : 'bg-rose-50 border-rose-200 text-[#E3262E]'
+                                    }`}
+                                  >
+                                    {kitShowPrice ? 'Exibir Preço na Home' : 'Ocultar (Sob Consulta)'}
+                                  </button>
+                                </div>
                               </div>
 
-                              <div>
-                                <label className="block text-xs font-bold text-zinc-800 mb-1">
-                                  Preço Promocional do Kit (R$) *
-                                </label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={kitPromoPrice}
-                                  onChange={(e) => setKitPromoPrice(e.target.value)}
-                                  className="w-full px-3 py-2 bg-white border-2 border-[#FFBE00] rounded-xl text-xs font-mono font-extrabold text-zinc-950"
-                                />
-                              </div>
+                              {/* 1-Click Discount Presets + Live Cart Verification */}
+                              <div className="p-2.5 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="text-[11px] font-bold text-zinc-700">
+                                    Aplicar Desconto Rápido:
+                                  </span>
+                                  {[10, 15, 20, 25].map((pct) => (
+                                    <button
+                                      key={`kit-disc-${pct}`}
+                                      type="button"
+                                      onClick={() => {
+                                        if (regularTotal <= 0) return;
+                                        const discounted =
+                                          Math.round(regularTotal * (1 - pct / 100) * 10) /
+                                          10;
+                                        setKitPromoPrice(discounted.toFixed(2));
+                                      }}
+                                      className="px-2 py-1 rounded-lg bg-white hover:bg-[#FFBE00] border border-zinc-300 font-mono text-[10px] font-extrabold text-zinc-900 cursor-pointer"
+                                    >
+                                      -{pct}% OFF
+                                    </button>
+                                  ))}
+                                </div>
 
-                              <div>
-                                <label className="block text-xs font-bold text-zinc-800 mb-1">
-                                  Visibilidade do Preço
-                                </label>
-                                <button
-                                  type="button"
-                                  onClick={() => setKitShowPrice((prev) => !prev)}
-                                  className={`w-full py-2 px-3 rounded-xl border text-xs font-extrabold cursor-pointer ${
-                                    kitShowPrice
-                                      ? 'bg-[#FFFBEB] border-[#FFBE00] text-zinc-950'
-                                      : 'bg-rose-50 border-rose-200 text-[#E3262E]'
-                                  }`}
-                                >
-                                  {kitShowPrice ? 'Exibir Preço na Home' : 'Ocultar (Sob Consulta)'}
-                                </button>
+                                <div className="font-mono text-[11px] font-extrabold text-emerald-800">
+                                  Vai entrar na Cesta por{' '}
+                                  <span className="text-zinc-950 underline">
+                                    {formatCurrency(finalCartKitPrice)}
+                                  </span>{' '}
+                                  (Economia exata: -{formatCurrency(exactSavings)})
+                                </div>
                               </div>
                             </div>
                           );

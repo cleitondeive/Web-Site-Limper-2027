@@ -2,8 +2,6 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowRight,
   ArrowUpDown,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   ExternalLink,
   FilePlus2,
@@ -39,11 +37,15 @@ import {
 } from './types/commerce';
 import {
   addToCart,
+  buildKitCartProduct,
   calculateCartTotals,
+  calculateKitPricing,
   filterProducts,
   formatCurrency,
   getEffectivePrice,
+  getOrderStageMeta,
   mergeOrderIntoCart,
+  transitionOrderStatus,
   updateCartQuantity,
 } from './utils/commerce';
 import { storageService } from './utils/storage';
@@ -54,6 +56,7 @@ import { MegaMenu } from './components/MegaMenu';
 import { HeroCarousel } from './components/HeroCarousel';
 import { CategoryBar } from './components/CategoryBar';
 import { ProductCard, ProductDetailModal } from './components/ProductCard';
+import { ProductShelfCarousel } from './components/ProductShelfCarousel';
 import {
   CartCheckoutDrawer,
   OrderConfirmationModal,
@@ -108,7 +111,6 @@ export default function App() {
   const [volumeFilter, setVolumeFilter] = useState<VolumeFilterOption>('all');
   const [sortBy, setSortBy] = useState<CatalogSortOption>('featured');
   const [isMegaMenuOpen, setIsMegaMenuOpen] = useState(false);
-  const [showcasePage, setShowcasePage] = useState(0);
 
   // Modals & Drawers
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -122,6 +124,10 @@ export default function App() {
   useEffect(() => {
     storageService.saveCart(cart);
   }, [cart]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [activeView]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -186,6 +192,15 @@ export default function App() {
     showToast(`${product.title} adicionado à cesta`);
   };
 
+  const handleAddKitToCart = (kit: PromoKit) => {
+    const kitCartProduct = buildKitCartProduct(kit, products);
+    setCart((prev) => addToCart(prev, kitCartProduct, 1));
+    showToast(
+      `${kit.title} (${formatCurrency(getEffectivePrice(kitCartProduct))}) adicionado à cesta!`
+    );
+    setIsCartOpen(true);
+  };
+
   const handleAddBatchToCart = (items: { product: Product; quantity: number }[]) => {
     setCart((prev) => {
       let updated = [...prev];
@@ -208,7 +223,12 @@ export default function App() {
   };
 
   const handleRepeatOrder = (order: Order) => {
-    const { updatedCart, addedCount } = mergeOrderIntoCart(cart, order, products);
+    const { updatedCart, addedCount } = mergeOrderIntoCart(
+      cart,
+      order,
+      products,
+      kits
+    );
     setCart(updatedCart);
     showToast(`${addedCount} itens do pedido ${order.id} carregados na cesta!`);
     setIsCartOpen(true);
@@ -234,18 +254,35 @@ export default function App() {
     ? baseFilteredProducts.filter((p) => favorites.includes(p.id))
     : baseFilteredProducts;
 
-  // 5-Item Featured Todimo Showcase Row (prioritizing admin-starred featured products)
+  const cartQuantities = React.useMemo(() => {
+    const map: Record<string, number> = {};
+    cart.forEach((item) => {
+      map[item.product.id] = item.quantity;
+    });
+    return map;
+  }, [cart]);
+
+  // Horizontal Peek Shelves (Todimo + Drogasil + Mercado Livre + Netflix style)
   const promoShowcaseProducts = products
     .filter((p) => p.status === 'active' && (p.featured || (p.promoPrice && p.promoPrice < p.price)))
     .sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0));
-  const showcaseSliceStart = (showcasePage * 5) % Math.max(1, promoShowcaseProducts.length);
-  const visibleShowcaseFive = [
-    ...promoShowcaseProducts.slice(showcaseSliceStart, showcaseSliceStart + 5),
-    ...promoShowcaseProducts.slice(
-      0,
-      Math.max(0, 5 - (promoShowcaseProducts.length - showcaseSliceStart))
-    ),
-  ].slice(0, 5);
+
+  const casaLavanderiaShelf = products.filter(
+    (p) =>
+      p.status === 'active' &&
+      (p.categoryId === 'cat-casa' ||
+        p.categoryId === 'cat-lavanderia' ||
+        p.categoryId === 'cat-aromatizantes')
+  );
+
+  const pesadaAutomotivaShelf = products.filter(
+    (p) =>
+      p.status === 'active' &&
+      (p.categoryId === 'cat-pesada' ||
+        p.categoryId === 'cat-automotiva' ||
+        p.categoryId === 'cat-maos' ||
+        p.categoryId === 'cat-pet')
+  );
 
   // Active Promo Kits managed in Admin ("Kits Prontos de Limpeza com Imagem")
   const activeKits = kits.filter((k) => k.active);
@@ -410,66 +447,75 @@ export default function App() {
               latestActiveOrder={latestActiveOrder}
             />
 
-            {/* Section 2: Todimo 5-Product Horizontal Showcase ("Ofertas Imbatíveis da Semana") */}
+            {/* Section 2: Netflix + Mercado Livre + Drogasil + Todimo Interactive Horizontal Peek Shelves */}
             {!selectedCategoryId && !searchQuery && !onlyFavorites && (
-              <section className="max-w-[1360px] mx-auto px-3 sm:px-6 pt-3 sm:pt-4 pb-2">
-                <div className="flex items-center justify-between gap-3 sm:gap-4 mb-3 sm:mb-4">
-                  <div>
-                    <div className="inline-flex items-center gap-2 text-[10px] sm:text-[11px] font-mono uppercase tracking-wider font-extrabold text-[#E3262E]">
-                      <span>VITRINE DE DESTAQUES · 5 PRODUTOS POR LINHA</span>
-                    </div>
-                    <h2 className="font-display text-lg sm:text-2xl font-extrabold text-zinc-900">
-                      Ofertas Imbatíveis da Semana Limper MT
-                    </h2>
-                  </div>
+              <div className="space-y-1">
+                <ProductShelfCarousel
+                  kicker="VITRINE DE OFERTAS · DESLIZE PARA VER MAIS"
+                  badgeText="ATÉ 25% OFF NO PIX"
+                  title="Ofertas Imbatíveis da Semana Limper MT"
+                  subtitle="Preços de fábrica Quimiprol com retirada grátis em 15min ou desconto levando 3 ou mais unidades"
+                  products={promoShowcaseProducts}
+                  categories={categories}
+                  settings={settings}
+                  cartQuantities={cartQuantities}
+                  favorites={favorites}
+                  customerCep={customerProfile.cep}
+                  onAdd={handleAddToCart}
+                  onUpdateQuantity={handleUpdateCartQty}
+                  onOpenDetail={setDetailProduct}
+                  onToggleFavorite={handleToggleFavorite}
+                  viewAllLabel="Ver todas as ofertas"
+                  onViewAll={() => {
+                    setOnlyOffers(true);
+                    document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                />
 
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShowcasePage((prev) =>
-                          prev === 0 ? promoShowcaseProducts.length - 1 : prev - 1
-                        )
-                      }
-                      aria-label="Produtos anteriores da vitrine"
-                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white hover:bg-[#FFBE00] border border-zinc-300 text-zinc-800 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowcasePage((prev) => prev + 1)}
-                      aria-label="Próximos produtos da vitrine"
-                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white hover:bg-[#FFBE00] border border-zinc-300 text-zinc-800 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
+                <ProductShelfCarousel
+                  kicker="SUGESTÕES PARA VOCÊ · LINHA CASA & LAVANDERIA"
+                  badgeText="MAIS VENDIDOS"
+                  title="Para Sua Casa, Roupas & Perfumaria"
+                  subtitle="Amaciantes concentrados, Álcool Perfumado 5L, Água para Lençóis e Sabão Líquido Quimiprol"
+                  products={casaLavanderiaShelf}
+                  categories={categories}
+                  settings={settings}
+                  cartQuantities={cartQuantities}
+                  favorites={favorites}
+                  customerCep={customerProfile.cep}
+                  onAdd={handleAddToCart}
+                  onUpdateQuantity={handleUpdateCartQty}
+                  onOpenDetail={setDetailProduct}
+                  onToggleFavorite={handleToggleFavorite}
+                  viewAllLabel="Ver linha Casa & Lavanderia"
+                  onViewAll={() => {
+                    setSelectedCategoryId('cat-casa');
+                    document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                />
 
-                {/* 2-Column on Mobile / 5-Column on Desktop Product Showcase Row (Todimo pattern) */}
-                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4">
-                  {visibleShowcaseFive.map((product) => {
-                    const cartEntry = cart.find((c) => c.product.id === product.id);
-                    const catObj = categories.find((c) => c.id === product.categoryId);
-                    return (
-                      <ProductCard
-                        key={`showcase-${product.id}`}
-                        product={product}
-                        category={catObj}
-                        settings={settings}
-                        quantityInCart={cartEntry ? cartEntry.quantity : 0}
-                        isFavorite={favorites.includes(product.id)}
-                        customerCep={customerProfile.cep}
-                        onAdd={handleAddToCart}
-                        onUpdateQuantity={handleUpdateCartQty}
-                        onOpenDetail={setDetailProduct}
-                        onToggleFavorite={handleToggleFavorite}
-                      />
-                    );
-                  })}
-                </div>
-              </section>
+                <ProductShelfCarousel
+                  kicker="PARA SUA EMPRESA, CONDOMÍNIO OU LAVA-JATO"
+                  badgeText="ATACADO 5 LITROS"
+                  title="Limpeza Pesada, Pós-Obra & Estética Automotiva"
+                  subtitle="Cloro concentrado, Quimi 90, Limpa Pisos, Shampoo Automotivo c/ Cera e Limpa Alumínio"
+                  products={pesadaAutomotivaShelf}
+                  categories={categories}
+                  settings={settings}
+                  cartQuantities={cartQuantities}
+                  favorites={favorites}
+                  customerCep={customerProfile.cep}
+                  onAdd={handleAddToCart}
+                  onUpdateQuantity={handleUpdateCartQty}
+                  onOpenDetail={setDetailProduct}
+                  onToggleFavorite={handleToggleFavorite}
+                  viewAllLabel="Ver linha Profissional"
+                  onViewAll={() => {
+                    setSelectedCategoryId('cat-pesada');
+                    document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                />
+              </div>
             )}
 
             {/* Section 3: Circular Categories Bar & Complete 5-Column Catalog Grid */}
@@ -659,30 +705,17 @@ export default function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                   {activeKits.map((kit, idx) => {
-                    const resolvedEntries = kit.items
-                      .map((item) => {
-                        const product = products.find((p) => p.id === item.productId);
-                        return product ? { product, quantity: item.quantity } : null;
-                      })
-                      .filter(
-                        (entry): entry is { product: Product; quantity: number } =>
-                          Boolean(entry)
-                      );
-
-                    const regularTotal = resolvedEntries.reduce(
-                      (acc, entry) =>
-                        acc + getEffectivePrice(entry.product) * entry.quantity,
-                      0
-                    );
-                    const finalKitPrice =
-                      kit.promoPrice > 0 ? kit.promoPrice : regularTotal;
-                    const savingsAmount = Math.max(0, regularTotal - finalKitPrice);
-                    const totalUnitsCount = resolvedEntries.reduce(
-                      (acc, entry) => acc + entry.quantity,
-                      0
-                    );
+                    const {
+                      resolvedEntries,
+                      regularTotal,
+                      finalKitPrice,
+                      savingsAmount,
+                      totalUnitsCount,
+                    } = calculateKitPricing(kit, products);
                     const isPriceHidden =
                       Boolean(settings.hideAllPrices) || kit.showPrice === false;
+                    const kitQtyInCart =
+                      cart.find((c) => c.product.id === kit.id)?.quantity || 0;
 
                     return (
                       <article
@@ -784,11 +817,15 @@ export default function App() {
 
                           <button
                             type="button"
-                            onClick={() => handleAddBatchToCart(resolvedEntries)}
+                            onClick={() => handleAddKitToCart(kit)}
                             className="px-4 py-2.5 bg-[#E3262E] hover:bg-[#C81E25] text-white font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
                           >
                             <ShoppingBasket className="w-3.5 h-3.5" />
-                            <span>Levar Kit</span>
+                            <span>
+                              {kitQtyInCart > 0
+                                ? `Na Cesta (${kitQtyInCart}) · +1`
+                                : `Levar Kit (${formatCurrency(finalKitPrice)})`}
+                            </span>
                           </button>
                         </div>
                       </article>
@@ -1196,6 +1233,20 @@ export default function App() {
             settings={settings}
             savedCustomerPhone={customerProfile.phone}
             onRepeatOrder={handleRepeatOrder}
+            onUpdateOrderStatus={(orderId, nextStatus, reason) => {
+              const target = orders.find((o) => o.id === orderId);
+              const updated = orders.map((o) =>
+                o.id === orderId ? transitionOrderStatus(o, nextStatus, reason) : o
+              );
+              handleSaveOrders(updated);
+              const meta = getOrderStageMeta(
+                nextStatus,
+                target?.deliveryType || 'pickup'
+              );
+              showToast(
+                `Pedido ${orderId} atualizado para: ${meta.shortLabel}`
+              );
+            }}
             onBackToStore={() => setActiveView('store')}
           />
         )}

@@ -1,5 +1,16 @@
 import React from 'react';
-import { ArrowDown, Eye, Heart, Minus, Plus, ShoppingCart, Sparkles, X } from 'lucide-react';
+import {
+  ArrowDown,
+  Eye,
+  Heart,
+  Minus,
+  Plus,
+  ShoppingCart,
+  Sparkles,
+  Star,
+  X,
+  Zap,
+} from 'lucide-react';
 import { Category, Product, StoreSettings } from '../types/commerce';
 import {
   formatCurrency,
@@ -23,6 +34,14 @@ interface ProductCardProps {
   onToggleFavorite?: (productId: string) => void;
 }
 
+function getDeterministicReviewCount(id: string): number {
+  let sum = 0;
+  for (let i = 0; i < id.length; i++) {
+    sum += id.charCodeAt(i);
+  }
+  return 24 + (sum % 65);
+}
+
 export const ProductCard: React.FC<ProductCardProps> = ({
   product,
   category,
@@ -41,11 +60,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const pricePerLiter = getPricePerLiterLabel(product);
   const isOutOfStock = product.status === 'out_of_stock';
   const installmentValue = effectivePrice / 3;
+  const wholesaleUnitPrice = +(effectivePrice * 0.94).toFixed(2);
+  const reviewCount = getDeterministicReviewCount(product.id);
 
   return (
-    <article className="group bg-white rounded-2xl border border-zinc-200/90 hover:border-[#FFBE00] overflow-hidden flex flex-col justify-between transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
+    <article className="group h-full bg-white rounded-2xl border border-zinc-200/90 hover:border-[#FFBE00] overflow-hidden flex flex-col justify-between transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
       <div>
-        {/* Product Image Container (Todimo + Drogasil style) */}
+        {/* Product Image Container (Todimo + Drogasil + Mercado Livre style) */}
         <div className="relative aspect-square bg-white p-2 sm:p-3 overflow-hidden border-b border-zinc-100">
           <button
             type="button"
@@ -63,14 +84,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
           {/* Top-Left Circular Yellow Discount Badge (Todimo style: "22% OFF") */}
           {priceVisible && discountPct > 0 && !isOutOfStock && (
-            <div className="absolute top-2 left-2 sm:top-3 sm:left-3 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-[#E5B800] text-zinc-950 font-mono font-extrabold text-[10px] sm:text-[11px] leading-none flex flex-col items-center justify-center shadow-xs border border-white">
+            <div className="absolute top-2 left-2 sm:top-2.5 sm:left-2.5 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E5B800] text-zinc-950 font-mono font-extrabold text-[10px] sm:text-[11px] leading-none flex flex-col items-center justify-center shadow-xs border border-white">
               <span>{discountPct}%</span>
-              <span className="text-[8px] sm:text-[9px] font-black tracking-tight mt-0.5">OFF</span>
+              <span className="text-[8px] font-black tracking-tight mt-0.5">OFF</span>
             </div>
           )}
 
-          {/* Top-Right Favorite Heart & Quick-View Buttons */}
-          <div className="absolute top-2 right-2 sm:top-3 sm:right-3 flex flex-col gap-1 sm:gap-1.5">
+          {/* Top-Right Drogasil Green Discount Pill or Favorite Heart */}
+          <div className="absolute top-2 right-2 sm:top-2.5 sm:right-2.5 flex flex-col items-end gap-1">
+            {priceVisible && discountPct > 0 && !isOutOfStock && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-[#15803D] text-white font-mono text-[9px] sm:text-[10px] font-extrabold shadow-2xs">
+                <ArrowDown className="w-2.5 h-2.5 stroke-[3]" />
+                <span>{discountPct}%</span>
+              </span>
+            )}
             {onToggleFavorite && (
               <button
                 type="button"
@@ -96,19 +123,42 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               type="button"
               onClick={() => onOpenDetail(product)}
               aria-label={`Inspecionar ${product.title}`}
-              className="hidden sm:flex w-8 h-8 rounded-full bg-white/95 hover:bg-[#FFBE00] text-zinc-600 hover:text-zinc-950 border border-zinc-200 items-center justify-center transition-colors shadow-2xs cursor-pointer"
+              className="hidden sm:flex w-7 h-7 rounded-full bg-white/95 hover:bg-[#FFBE00] text-zinc-600 hover:text-zinc-950 border border-zinc-200 items-center justify-center transition-colors shadow-2xs cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* Volume / Options Pill at bottom of image (Drogasil "2 opções" style) */}
-          <div className="absolute bottom-2.5 sm:bottom-4 left-1/2 -translate-x-1/2 max-w-[92%]">
-            <span className="block truncate px-2 sm:px-2.5 py-0.5 rounded-full bg-white/95 border border-zinc-300 text-[9px] sm:text-[10px] font-mono font-bold text-zinc-700 shadow-2xs whitespace-nowrap">
-              {product.volumeLabel.includes('|') ? '2 opções · ' : 'Emb. '}
+          {/* Bottom-Left Volume Pill */}
+          <div className="absolute bottom-2 sm:bottom-2.5 left-2 sm:left-2.5 max-w-[68%]">
+            <span className="block truncate px-2 py-0.5 rounded-full bg-white/95 border border-zinc-300 text-[9px] sm:text-[10px] font-mono font-bold text-zinc-700 shadow-2xs whitespace-nowrap">
               {product.volumeLabel}
             </span>
           </div>
+
+          {/* Bottom-Right Drogasil Floating Circular Red "+" Quick-Add Button */}
+          {!isOutOfStock && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAdd(product);
+              }}
+              aria-label={`Adição rápida de ${product.title}`}
+              title="Adicionar rápido à cesta"
+              className={`absolute bottom-2 right-2 sm:bottom-2.5 sm:right-2.5 w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shadow-md transition-transform active:scale-90 cursor-pointer ${
+                quantityInCart > 0
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-white'
+                  : 'bg-[#C81E25] hover:bg-[#A6141B] text-white'
+              }`}
+            >
+              {quantityInCart > 0 ? (
+                <span className="font-mono text-xs font-extrabold">{quantityInCart}</span>
+              ) : (
+                <Plus className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.6]" />
+              )}
+            </button>
+          )}
 
           {isOutOfStock && (
             <div className="absolute inset-0 bg-white/85 backdrop-blur-2xs flex items-center justify-center p-2 text-center">
@@ -119,28 +169,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           )}
         </div>
 
-        {/* Promotional Highlight Badges & Title (Todimo + Drogasil Hybrid) */}
-        <div className="p-2.5 sm:p-3.5 pb-1.5 sm:pb-2 space-y-1.5 sm:space-y-2">
-          {/* Badges Stack */}
-          <div className="space-y-1">
+        {/* Promotional Highlight Badges, Title & Star Rating (Todimo + Drogasil + Mercado Livre Hybrid) */}
+        <div className="p-2.5 sm:p-3 pb-1.5 space-y-1.5">
+          {/* Single Clean Highlight Tag (Mercado Livre "MAIS VENDIDO" / Todimo "Preço Exclusivo Site") */}
+          <div>
             {discountPct > 0 ? (
-              <>
-                <div className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-[#2B2E34] text-white text-[10px] font-extrabold tracking-tight">
-                  Oferta do Dia
-                </div>
-                <div className="w-full py-0.5 sm:py-1 px-1.5 sm:px-2 rounded-md bg-[#E5B800] text-zinc-950 text-[9px] sm:text-[10px] font-extrabold text-center truncate">
-                  {product.badgeLabel || 'Ofertas do Mês | Limper MT'}
-                </div>
-              </>
+              <div className="inline-block max-w-full py-0.5 px-2 rounded bg-[#E5B800] text-zinc-950 text-[9px] sm:text-[10px] font-extrabold truncate">
+                {product.badgeLabel || 'Preço Exclusivo Site | Limper MT'}
+              </div>
             ) : (
-              <div className="w-full py-0.5 sm:py-1 px-1.5 sm:px-2 rounded-md bg-[#FFF3C4] border border-[#FDE68A] text-zinc-900 text-[9px] sm:text-[10px] font-extrabold text-center truncate">
-                {product.subBadgeLabel || `Exclusivo | ${category?.shortName || 'Quimiprol'}`}
+              <div className="inline-block max-w-full py-0.5 px-2 rounded bg-[#FF6B00] text-white text-[9px] sm:text-[10px] font-extrabold uppercase tracking-tight truncate">
+                {product.subBadgeLabel || `MAIS VENDIDO · ${category?.shortName || 'Quimiprol'}`}
               </div>
             )}
           </div>
 
-          {/* Product Title + SKU Reference (Todimo style) */}
-          <h3 className="font-sans text-[11px] sm:text-[13px] font-semibold text-zinc-800 leading-snug line-clamp-2 min-h-[2rem] sm:min-h-[2.3rem]">
+          {/* Product Title + SKU Reference */}
+          <h3 className="font-sans text-[11px] sm:text-[13px] font-semibold text-zinc-800 leading-snug line-clamp-2 min-h-[2rem] sm:min-h-[2.25rem]">
             <button
               type="button"
               onClick={() => onOpenDetail(product)}
@@ -153,54 +198,82 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </button>
           </h3>
 
-          {product.dilutionHint && (
-            <p className="text-[10px] sm:text-[11px] text-zinc-500 truncate">
-              <span className="hidden sm:inline">Rendimento: </span>
-              <span className="font-semibold text-zinc-700">{product.dilutionHint}</span>
-            </p>
-          )}
+          {/* Drogasil Star Rating Row */}
+          <div className="flex items-center justify-between gap-1 text-[10px] text-zinc-500">
+            <div className="flex items-center gap-0.5 text-[#F59E0B]">
+              <Star className="w-3 h-3 fill-[#F59E0B]" />
+              <Star className="w-3 h-3 fill-[#F59E0B]" />
+              <Star className="w-3 h-3 fill-[#F59E0B]" />
+              <Star className="w-3 h-3 fill-[#F59E0B]" />
+              <Star className="w-3 h-3 fill-[#F59E0B]" />
+              <span className="font-mono font-bold text-zinc-500 ml-0.5">
+                ({reviewCount})
+              </span>
+            </div>
+            {pricePerLiter && (
+              <span className="font-mono text-[9px] font-bold text-[#B45309] truncate">
+                {pricePerLiter}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Pricing, Installments, CEP Notice & Add Button */}
-      <div className="p-2.5 sm:p-3.5 pt-1 flex flex-col justify-end gap-2">
+      {/* Pricing, Mercado Livre Wholesale Tier ("Levando 3 ou mais"), Fast Pickup & Add Button */}
+      <div className="p-2.5 sm:p-3 pt-1 flex flex-col justify-end gap-1.5">
         {priceVisible ? (
-          <div>
+          <div className="space-y-1">
             {discountPct > 0 ? (
-              <div className="flex items-center gap-1 sm:gap-1.5">
-                <span className="text-[10px] sm:text-[11px] font-mono text-zinc-400 line-through tabular-nums">
-                  {formatCurrency(product.price)}
-                </span>
-                <span className="inline-flex items-center gap-0.5 px-1 sm:px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-mono text-[9px] sm:text-[10px] font-extrabold">
-                  <ArrowDown className="w-2.5 h-2.5 stroke-[3]" />
-                  {discountPct}%
-                </span>
+              <div className="text-[10px] sm:text-[11px] font-mono text-zinc-400 line-through tabular-nums leading-none">
+                {formatCurrency(product.price)}
               </div>
             ) : (
-              <div className="text-[10px] sm:text-[11px] text-zinc-400 truncate">
-                Preço exclusivo online
+              <div className="text-[10px] text-zinc-400 leading-none truncate">
+                Direto da fábrica Quimiprol
               </div>
             )}
 
-            <div className="flex items-baseline justify-between gap-1 mt-0.5">
-              <div className="text-base sm:text-xl font-mono font-extrabold text-zinc-950 tabular-nums leading-tight">
+            {/* Main Price + Mercado Livre Green PIX Tag */}
+            <div className="flex flex-wrap items-baseline gap-1.5">
+              <div className="text-base sm:text-xl font-mono font-extrabold text-zinc-950 tabular-nums leading-none">
                 {formatCurrency(effectivePrice)}
               </div>
-              {pricePerLiter && (
-                <span className="px-1 sm:px-1.5 py-0.5 rounded-md bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309] font-mono text-[9px] sm:text-[10px] font-bold shrink-0">
-                  {pricePerLiter}
+              {discountPct > 0 ? (
+                <span className="px-1.5 py-0.5 rounded bg-[#00A650] text-white font-mono text-[9px] sm:text-[10px] font-extrabold leading-none">
+                  {discountPct}% OFF
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold text-[#00A650] leading-none">
+                  no PIX
                 </span>
               )}
             </div>
 
-            <div className="text-[10px] sm:text-[11px] text-zinc-500 mt-0.5 truncate">
+            <div className="text-[10px] sm:text-[11px] text-zinc-500 leading-tight truncate">
               ou <strong className="text-zinc-700">3x {formatCurrency(installmentValue)}</strong> s/ juros
             </div>
 
-            <div className="hidden sm:block text-[10px] text-zinc-400 mt-1 truncate">
-              {customerCep
-                ? `Disponível p/ CEP ${customerCep} (15min)`
-                : 'Retirada 15min Av. Couto Magalhães'}
+            {/* Mercado Livre B2B Wholesale Tier Pill ("R$ XX,XX levando 3 ou mais") */}
+            {!isOutOfStock && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUpdateQuantity(product.id, Math.max(3, quantityInCart + 3));
+                }}
+                title="Clique para adicionar 3 unidades no pacote atacado"
+                className="w-full text-left px-2 py-1 rounded-md bg-[#EBF3FF] hover:bg-[#DBEAFE] text-[#1D4ED8] font-mono text-[9px] sm:text-[10px] font-extrabold truncate transition-colors cursor-pointer"
+              >
+                {formatCurrency(wholesaleUnitPrice)} un. levando 3 ou +
+              </button>
+            )}
+
+            {/* Mercado Livre FULL-style Green Fast Pickup / Delivery Line */}
+            <div className="flex items-center gap-1 text-[10px] font-extrabold text-[#00A650] pt-0.5 truncate">
+              <Zap className="w-3 h-3 fill-[#00A650] shrink-0" />
+              <span className="truncate">
+                {customerCep ? 'Retirada Grátis 15min' : 'Retirada Grátis ⚡ 15 MIN'}
+              </span>
             </div>
           </div>
         ) : (
@@ -252,7 +325,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             type="button"
             onClick={() => onAdd(product)}
             aria-label={`Adicionar ${product.title} ao carrinho`}
-            className="w-full py-2 sm:py-2.5 px-2 sm:px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-[11px] sm:text-xs rounded-xl flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer shadow-2xs"
+            className="w-full py-2 px-2 sm:px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-[11px] sm:text-xs rounded-xl flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer shadow-2xs"
           >
             <ShoppingCart className="w-3.5 h-3.5 stroke-[2.2] shrink-0" />
             <span className="sm:hidden">{priceVisible ? 'Adicionar' : 'Cotar'}</span>

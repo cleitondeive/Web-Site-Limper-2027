@@ -3,10 +3,12 @@ import {
   CatalogSortOption,
   DeliveryType,
   Order,
+  OrderDatePreset,
   OrderStatus,
   PaymentMethod,
   Product,
   PromoCoupon,
+  PromoKit,
   StoreSettings,
   VolumeFilterOption,
 } from '../types/commerce';
@@ -213,10 +215,102 @@ export function updateCartQuantity(
   );
 }
 
+export interface KitPricingBreakdown {
+  resolvedEntries: { product: Product; quantity: number }[];
+  regularTotal: number;
+  listPriceTotal: number;
+  finalKitPrice: number;
+  savingsAmount: number;
+  discountPct: number;
+  totalUnitsCount: number;
+}
+
+export function calculateKitPricing(
+  kit: PromoKit,
+  catalogProducts: Product[]
+): KitPricingBreakdown {
+  const resolvedEntries = kit.items
+    .map((item) => {
+      const product = catalogProducts.find((p) => p.id === item.productId);
+      return product ? { product, quantity: Math.max(1, item.quantity) } : null;
+    })
+    .filter(
+      (entry): entry is { product: Product; quantity: number } => Boolean(entry)
+    );
+
+  const regularTotalRaw = resolvedEntries.reduce(
+    (acc, entry) => acc + getEffectivePrice(entry.product) * entry.quantity,
+    0
+  );
+  const listPriceTotalRaw = resolvedEntries.reduce(
+    (acc, entry) => acc + entry.product.price * entry.quantity,
+    0
+  );
+
+  const regularTotal = Math.round(regularTotalRaw * 100) / 100;
+  const listPriceTotal = Math.round(listPriceTotalRaw * 100) / 100;
+  const finalKitPrice =
+    kit.promoPrice > 0 ? Math.round(kit.promoPrice * 100) / 100 : regularTotal;
+  const savingsAmount = Math.max(
+    0,
+    Math.round((regularTotal - finalKitPrice) * 100) / 100
+  );
+  const discountPct =
+    regularTotal > 0 ? Math.round((savingsAmount / regularTotal) * 100) : 0;
+  const totalUnitsCount = resolvedEntries.reduce(
+    (acc, entry) => acc + entry.quantity,
+    0
+  );
+
+  return {
+    resolvedEntries,
+    regularTotal,
+    listPriceTotal,
+    finalKitPrice,
+    savingsAmount,
+    discountPct,
+    totalUnitsCount,
+  };
+}
+
+export function buildKitCartProduct(
+  kit: PromoKit,
+  catalogProducts: Product[]
+): Product {
+  const breakdown = calculateKitPricing(kit, catalogProducts);
+  const itemsLabel = breakdown.resolvedEntries
+    .map((e) => `${e.quantity}x ${e.product.title} (${e.product.volumeLabel})`)
+    .join(' + ');
+
+  return {
+    id: kit.id,
+    sku: `KIT-${kit.id.replace(/^kit-/i, '').toUpperCase()}`,
+    title: kit.title,
+    description: itemsLabel
+      ? `Itens inclusos no Kit: ${itemsLabel}`
+      : kit.description,
+    categoryId: 'cat-casa',
+    price: breakdown.regularTotal > 0 ? breakdown.regularTotal : breakdown.finalKitPrice,
+    promoPrice:
+      breakdown.finalKitPrice < breakdown.regularTotal
+        ? breakdown.finalKitPrice
+        : null,
+    showPrice: kit.showPrice !== false,
+    unit: 'Kit',
+    volumeLabel: `Combo (${breakdown.totalUnitsCount} unid.)`,
+    status: kit.active ? 'active' : 'inactive',
+    imageUrl: kit.imageUrl,
+    featured: true,
+    badgeLabel: kit.badge,
+    dilutionHint: itemsLabel || kit.description,
+  };
+}
+
 export function mergeOrderIntoCart(
   currentCart: CartItem[],
   order: Order,
-  catalogProducts: Product[]
+  catalogProducts: Product[],
+  kits?: PromoKit[]
 ): { updatedCart: CartItem[]; addedCount: number } {
   let updated = [...currentCart];
   let addedCount = 0;
@@ -228,6 +322,18 @@ export function mergeOrderIntoCart(
     if (matchedProduct) {
       updated = addToCart(updated, matchedProduct, orderItem.quantity);
       addedCount += orderItem.quantity;
+      continue;
+    }
+
+    if (kits && kits.length > 0) {
+      const matchedKit = kits.find(
+        (k) => k.id === orderItem.productId && k.active
+      );
+      if (matchedKit) {
+        const kitProduct = buildKitCartProduct(matchedKit, catalogProducts);
+        updated = addToCart(updated, kitProduct, orderItem.quantity);
+        addedCount += orderItem.quantity;
+      }
     }
   }
 
@@ -557,3 +663,407 @@ export const ORDER_STATUS_META: Record<
     cleaningStageDesc: 'Pedido finalizado com sucesso. Use o botão abaixo para recomprar em 1 clique!',
   },
 };
+
+export interface OrderStageContextualMeta {
+  step: number;
+  shortLabel: string;
+  stageTitle: string;
+  stageDesc: string;
+  cleaningStageTitle: string;
+  cleaningStageDesc: string;
+  stepShortTitle: string;
+  stepSubLabel: string;
+  specialistLabel: string;
+  etaBadge: string;
+  stepCards: {
+    status: OrderStatus;
+    shortTitle: string;
+    subLabel: string;
+  }[];
+}
+
+export function getOrderStageMeta(
+  status: OrderStatus,
+  deliveryType: DeliveryType
+): OrderStageContextualMeta {
+  const baseStep = ORDER_STATUS_META[status]?.step || 1;
+
+  if (deliveryType === 'pickup') {
+    const pickupSteps: {
+      status: OrderStatus;
+      shortTitle: string;
+      subLabel: string;
+    }[] = [
+      {
+        status: 'pending_separation',
+        shortTitle: '1. Pedido Recebido',
+        subLabel: 'Fila Balcão Express',
+      },
+      {
+        status: 'separating',
+        shortTitle: '2. Separando Galões',
+        subLabel: 'Conferência & Lacres',
+      },
+      {
+        status: 'ready_or_out',
+        shortTitle: '3. Pronto na Loja!',
+        subLabel: 'Pode Vir Buscar s/ Fila',
+      },
+      {
+        status: 'completed',
+        shortTitle: '4. Retirado na Loja',
+        subLabel: 'Entregue no Balcão/Carro',
+      },
+    ];
+
+    if (status === 'pending_separation') {
+      const title = '1. Pedido Recebido para Retirada na Loja (15min)';
+      const desc =
+        'Seu pedido entrou na fila prioritária do Balcão Limper MT (Av. Couto Magalhães, 2820).';
+      return {
+        step: 1,
+        shortLabel: 'Recebido no Balcão',
+        stageTitle: title,
+        stageDesc: desc,
+        cleaningStageTitle: title,
+        cleaningStageDesc: desc,
+        stepShortTitle: pickupSteps[0].shortTitle,
+        stepSubLabel: pickupSteps[0].subLabel,
+        specialistLabel: 'Balcão Express 15min · Av. Couto Magalhães, 2820',
+        etaBadge: 'Pronto em ~15 min',
+        stepCards: pickupSteps,
+      };
+    }
+    if (status === 'separating') {
+      const title = '2. Separando Seus Galões para Você Buscar na Loja';
+      const desc =
+        'Nossa equipe está separando seus produtos Quimiprol e conferindo os lacres para você retirar sem fila.';
+      return {
+        step: 2,
+        shortLabel: 'Separando p/ Retirada',
+        stageTitle: title,
+        stageDesc: desc,
+        cleaningStageTitle: title,
+        cleaningStageDesc: desc,
+        stepShortTitle: pickupSteps[1].shortTitle,
+        stepSubLabel: pickupSteps[1].subLabel,
+        specialistLabel: 'Conferente do Balcão: Marcos V. (Quimiprol)',
+        etaBadge: 'Pronto em ~8 min',
+        stepCards: pickupSteps,
+      };
+    }
+    if (status === 'ready_or_out') {
+      const title = '3. Pronto no Balcão Limper MT! Pode Vir Buscar sem Fila';
+      const desc =
+        'Seus galões já estão separados e lacrados! Dirija-se à Av. Couto Magalhães, 2820, informe sua senha e carregue direto no porta-malas.';
+      return {
+        step: 3,
+        shortLabel: 'Pronto p/ Buscar na Loja!',
+        stageTitle: title,
+        stageDesc: desc,
+        cleaningStageTitle: title,
+        cleaningStageDesc: desc,
+        stepShortTitle: pickupSteps[2].shortTitle,
+        stepSubLabel: pickupSteps[2].subLabel,
+        specialistLabel: 'Pronto no Balcão Express · Estacionamento Fácil em Frente',
+        etaBadge: 'Pronto p/ Retirar Agora!',
+        stepCards: pickupSteps,
+      };
+    }
+    const title = '4. Pedido Retirado pelo Cliente na Loja Física';
+    const desc =
+      'Retirada concluída no Balcão Express da Av. Couto Magalhães, 2820. Precisa repor o estoque? Refaça o pedido em 1 clique!';
+    return {
+      step: 4,
+      shortLabel: 'Retirado na Loja',
+      stageTitle: title,
+      stageDesc: desc,
+      cleaningStageTitle: title,
+      cleaningStageDesc: desc,
+      stepShortTitle: pickupSteps[3].shortTitle,
+      stepSubLabel: pickupSteps[3].subLabel,
+      specialistLabel: 'Retirada Confirmada no Balcão Limper MT',
+      etaBadge: 'Retirado c/ Sucesso',
+      stepCards: pickupSteps,
+    };
+  }
+
+  // Delivery mode
+  const deliverySteps: {
+    status: OrderStatus;
+    shortTitle: string;
+    subLabel: string;
+  }[] = [
+    {
+      status: 'pending_separation',
+      shortTitle: '1. Pedido Confirmado',
+      subLabel: 'Recebido na Central',
+    },
+    {
+      status: 'separating',
+      shortTitle: '2. Separando Galões',
+      subLabel: 'Conferência & Lacres',
+    },
+    {
+      status: 'ready_or_out',
+      shortTitle: '3. Saiu p/ Entrega',
+      subLabel: 'Entregador a Caminho',
+    },
+    {
+      status: 'completed',
+      shortTitle: '4. Pedido Entregue',
+      subLabel: 'Recebido no Endereço',
+    },
+  ];
+
+  if (status === 'pending_separation') {
+    const title = '1. Pedido Confirmado para Entrega Delivery';
+    const desc =
+      'Pedido registrado na expedição! Aguardando início da conferência de galões e lotes.';
+    return {
+      step: 1,
+      shortLabel: 'Pedido Confirmado',
+      stageTitle: title,
+      stageDesc: desc,
+      cleaningStageTitle: title,
+      cleaningStageDesc: desc,
+      stepShortTitle: deliverySteps[0].shortTitle,
+      stepSubLabel: deliverySteps[0].subLabel,
+      specialistLabel: 'Expedição Delivery · Av. Couto Magalhães, 2820',
+      etaBadge: 'Saída em ~15 min',
+      stepCards: deliverySteps,
+    };
+  }
+  if (status === 'separating') {
+    const title = '2. Conferência & Separação de Galões Quimiprol';
+    const desc =
+      'Nossa equipe está separando seus galões e aplicando lacres anti-vazamento para o transporte.';
+    return {
+      step: 2,
+      shortLabel: 'Separando Galões no Estoque',
+      stageTitle: title,
+      stageDesc: desc,
+      cleaningStageTitle: title,
+      cleaningStageDesc: desc,
+      stepShortTitle: deliverySteps[1].shortTitle,
+      stepSubLabel: deliverySteps[1].subLabel,
+      specialistLabel: 'Conferente Técnico: Marcos V. (Lacre de Fábrica)',
+      etaBadge: 'Expedição em ~10 min',
+      stepCards: deliverySteps,
+    };
+  }
+  if (status === 'ready_or_out') {
+    const title = '3. Pedido Saiu para Entrega no Seu Endereço';
+    const desc =
+      'O entregador parceiro Limper Express já saiu da Av. Couto Magalhães, 2820 em direção ao seu endereço.';
+    return {
+      step: 3,
+      shortLabel: 'Saiu para Entrega!',
+      stageTitle: title,
+      stageDesc: desc,
+      cleaningStageTitle: title,
+      cleaningStageDesc: desc,
+      stepShortTitle: deliverySteps[2].shortTitle,
+      stepSubLabel: deliverySteps[2].subLabel,
+      specialistLabel: 'Motorista Limper Express em Rota · Galões Lacrados',
+      etaBadge: 'Chegada em ~15–25 min',
+      stepCards: deliverySteps,
+    };
+  }
+  const title = '4. Pedido Entregue com Sucesso no Endereço';
+  const desc =
+    'Entrega confirmada! Quando precisar repor seus produtos Quimiprol, use o botão abaixo para recomprar em 1 clique.';
+  return {
+    step: baseStep,
+    shortLabel: 'Entregue no Endereço',
+    stageTitle: title,
+    stageDesc: desc,
+    cleaningStageTitle: title,
+    cleaningStageDesc: desc,
+    stepShortTitle: deliverySteps[3].shortTitle,
+    stepSubLabel: deliverySteps[3].subLabel,
+    specialistLabel: 'Entrega Confirmada · Garantia Quimiprol',
+    etaBadge: 'Entregue c/ Sucesso',
+    stepCards: deliverySteps,
+  };
+}
+
+export const ORDER_STATUS_SEQUENCE: OrderStatus[] = [
+  'pending_separation',
+  'separating',
+  'ready_or_out',
+  'completed',
+];
+
+export function getAdjacentOrderStatus(
+  currentStatus: OrderStatus,
+  direction: 'prev' | 'next'
+): OrderStatus | null {
+  const idx = ORDER_STATUS_SEQUENCE.indexOf(currentStatus);
+  if (idx === -1) return null;
+  if (direction === 'prev') {
+    return idx > 0 ? ORDER_STATUS_SEQUENCE[idx - 1] : null;
+  }
+  return idx < ORDER_STATUS_SEQUENCE.length - 1
+    ? ORDER_STATUS_SEQUENCE[idx + 1]
+    : null;
+}
+
+export function transitionOrderStatus(
+  order: Order,
+  nextStatus: OrderStatus,
+  reason?: string,
+  nowIso: string = new Date().toISOString()
+): Order {
+  if (order.status === nextStatus) return order;
+  const fromIdx = ORDER_STATUS_SEQUENCE.indexOf(order.status);
+  const toIdx = ORDER_STATUS_SEQUENCE.indexOf(nextStatus);
+  const defaultReason =
+    toIdx < fromIdx
+      ? 'Retorno de etapa (correção operacional)'
+      : 'Avanço operacional de etapa';
+
+  const newEntry = {
+    fromStatus: order.status,
+    toStatus: nextStatus,
+    changedAt: nowIso,
+    reason: reason || defaultReason,
+  };
+
+  return {
+    ...order,
+    status: nextStatus,
+    statusHistory: [newEntry, ...(order.statusHistory || [])],
+  };
+}
+
+export function toDateKeyYmd(isoOrDate: string | Date): string {
+  const d = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate;
+  if (Number.isNaN(d.getTime())) return '';
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export function filterOrdersByCriteria(
+  orders: Order[],
+  criteria: {
+    searchQuery?: string;
+    datePreset?: OrderDatePreset;
+    startDate?: string; // YYYY-MM-DD
+    endDate?: string;   // YYYY-MM-DD
+    deliveryType?: 'all' | DeliveryType;
+    statusFilter?: 'all' | 'active' | OrderStatus;
+    referenceNow?: Date;
+  }
+): Order[] {
+  const rawQuery = (criteria.searchQuery || '').trim().toLowerCase();
+  const phoneDigits = normalizePhone(rawQuery);
+  const preset = criteria.datePreset || 'all';
+  const refNow = criteria.referenceNow || new Date();
+  const todayYmd = toDateKeyYmd(refNow);
+
+  const yesterdayDate = new Date(refNow.getTime() - 24 * 60 * 60 * 1000);
+  const yesterdayYmd = toDateKeyYmd(yesterdayDate);
+
+  const last7Cutoff = new Date(refNow.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const last7Ymd = toDateKeyYmd(last7Cutoff);
+
+  const last30Cutoff = new Date(refNow.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const last30Ymd = toDateKeyYmd(last30Cutoff);
+
+  return orders.filter((order) => {
+    // 1. Modality filter
+    if (
+      criteria.deliveryType &&
+      criteria.deliveryType !== 'all' &&
+      order.deliveryType !== criteria.deliveryType
+    ) {
+      return false;
+    }
+
+    // 2. Status filter
+    if (criteria.statusFilter && criteria.statusFilter !== 'all') {
+      if (criteria.statusFilter === 'active') {
+        if (order.status === 'completed') return false;
+      } else if (order.status !== criteria.statusFilter) {
+        return false;
+      }
+    }
+
+    // 3. Search query filter
+    if (rawQuery) {
+      const matchesId = order.id.toLowerCase().includes(rawQuery);
+      const matchesName = order.customerName.toLowerCase().includes(rawQuery);
+      const matchesCode = (order.pickupCode || '').toLowerCase().includes(rawQuery);
+      const matchesPhone =
+        phoneDigits.length >= 3 &&
+        normalizePhone(order.customerPhone).includes(phoneDigits);
+      const matchesItem = order.items.some((i) =>
+        i.title.toLowerCase().includes(rawQuery)
+      );
+      if (!matchesId && !matchesName && !matchesCode && !matchesPhone && !matchesItem) {
+        return false;
+      }
+    }
+
+    // 4. Date / Period filter
+    const orderYmd = toDateKeyYmd(order.createdAt);
+    if (!orderYmd) return true;
+
+    if (preset === 'today') {
+      return orderYmd === todayYmd;
+    }
+    if (preset === 'yesterday') {
+      return orderYmd === yesterdayYmd;
+    }
+    if (preset === 'last_7_days') {
+      return orderYmd >= last7Ymd && orderYmd <= todayYmd;
+    }
+    if (preset === 'last_30_days') {
+      return orderYmd >= last30Ymd && orderYmd <= todayYmd;
+    }
+    if (preset === 'custom') {
+      if (criteria.startDate && orderYmd < criteria.startDate) {
+        return false;
+      }
+      if (criteria.endDate && orderYmd > criteria.endDate) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+export function summarizeOrdersPeriod(orders: Order[]): {
+  totalOrders: number;
+  totalRevenue: number;
+  pickupCount: number;
+  deliveryCount: number;
+  activeCount: number;
+  completedCount: number;
+  averageTicket: number;
+} {
+  const totalOrders = orders.length;
+  const totalRevenue =
+    Math.round(orders.reduce((acc, o) => acc + o.total, 0) * 100) / 100;
+  const pickupCount = orders.filter((o) => o.deliveryType === 'pickup').length;
+  const deliveryCount = orders.filter((o) => o.deliveryType === 'delivery').length;
+  const completedCount = orders.filter((o) => o.status === 'completed').length;
+  const activeCount = totalOrders - completedCount;
+  const averageTicket =
+    totalOrders > 0 ? Math.round((totalRevenue / totalOrders) * 100) / 100 : 0;
+
+  return {
+    totalOrders,
+    totalRevenue,
+    pickupCount,
+    deliveryCount,
+    activeCount,
+    completedCount,
+    averageTicket,
+  };
+}
+

@@ -22,10 +22,10 @@ import {
 const STORAGE_KEYS = {
   CATEGORIES: 'limper_mt_categories_v3',
   PRODUCTS: 'limper_mt_products_v3',
-  KITS: 'limper_mt_kits_v3',
+  KITS: 'limper_mt_kits_v4',
   COUPONS: 'limper_mt_coupons_v3',
   BANNERS: 'limper_mt_banners_v4',
-  ORDERS: 'limper_mt_orders_v3',
+  ORDERS: 'limper_mt_orders_v5',
   SETTINGS: 'limper_mt_settings_v3',
   CART: 'limper_mt_cart_v3',
   CUSTOMER: 'limper_mt_customer_v3',

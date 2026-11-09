@@ -598,11 +598,104 @@ export const INITIAL_STORE_SETTINGS: StoreSettings = {
 
 export const INITIAL_ORDERS: Order[] = [
   {
+    id: '#LMP-1041',
+    createdAt: '2026-11-09T11:45:00.000Z',
+    customerName: 'Condomínio Residencial Solar das Águas',
+    customerPhone: '65992441122',
+    pickupCode: 'BALCÃO-1041',
+    estimatedTime: 'Pronto no Balcão Express · Av. Couto Magalhães, 2820 (Vaga Exclusiva)',
+    items: [
+      {
+        productId: 'prod-pes-2',
+        sku: 'QMP-302',
+        title: 'Detergente Clorado 5L | 2L',
+        volumeLabel: '5L',
+        unitPrice: 49.90,
+        quantity: 2,
+        subtotal: 99.80,
+      },
+      {
+        productId: 'prod-pes-3',
+        sku: 'QMP-303',
+        title: 'Hipoclorito de Sódio 5L',
+        volumeLabel: '5L',
+        unitPrice: 39.90,
+        quantity: 2,
+        subtotal: 79.80,
+      },
+      {
+        productId: 'prod-lav-6',
+        sku: 'QMP-206',
+        title: 'Água Sanitária 5L | 2L',
+        volumeLabel: '5L',
+        unitPrice: 16.50,
+        quantity: 3,
+        subtotal: 49.50,
+      },
+    ],
+    subtotal: 229.10,
+    deliveryFee: 0,
+    total: 229.10,
+    deliveryType: 'pickup',
+    paymentMethod: 'card',
+    cardSubType: 'credit',
+    status: 'ready_or_out',
+    statusHistory: [
+      {
+        fromStatus: 'separating',
+        toStatus: 'ready_or_out',
+        changedAt: '2026-11-09T11:58:00.000Z',
+        reason: 'Conferência de 7 galões 5L concluída · Pronto no Balcão Express',
+      },
+      {
+        fromStatus: 'pending_separation',
+        toStatus: 'separating',
+        changedAt: '2026-11-09T11:48:00.000Z',
+        reason: 'Iniciada separação prioritária para retirada na loja',
+      },
+    ],
+  },
+  {
+    id: '#LMP-1043',
+    createdAt: '2026-11-09T13:15:00.000Z',
+    customerName: 'Clínica Odontológica Sorriso VG (Dra. Patrícia)',
+    customerPhone: '65996112233',
+    pickupCode: 'BALCÃO-1043',
+    estimatedTime: 'Retirada Expressa em 15min · Av. Couto Magalhães, 2820',
+    items: [
+      {
+        productId: 'prod-casa-4',
+        sku: 'QMP-104',
+        title: 'Álcool Perfumado Lavanda 5L',
+        volumeLabel: '5L',
+        unitPrice: 32.90,
+        quantity: 2,
+        subtotal: 65.80,
+      },
+      {
+        productId: 'prod-maos-2',
+        sku: 'QMP-502',
+        title: 'Detergente para Mãos Dovar 5L | 2L',
+        volumeLabel: '5L',
+        unitPrice: 36.90,
+        quantity: 1,
+        subtotal: 36.90,
+      },
+    ],
+    subtotal: 102.70,
+    deliveryFee: 0,
+    total: 102.70,
+    deliveryType: 'pickup',
+    paymentMethod: 'pix',
+    status: 'pending_separation',
+    statusHistory: [],
+  },
+  {
     id: '#LMP-1042',
     createdAt: '2026-11-05T11:30:00.000Z',
     customerName: 'João Silva',
     customerPhone: '65999999999',
-    pickupCode: 'BALCÃO-1042',
+    pickupCode: 'PIN-9942',
     estimatedTime: 'Previsão de entrega hoje até 15h30 (Galões lacrados)',
     items: [
       {
@@ -646,57 +739,21 @@ export const INITIAL_ORDERS: Order[] = [
     },
     paymentMethod: 'pix',
     status: 'separating',
-  },
-  {
-    id: '#LMP-1041',
-    createdAt: '2026-11-05T10:15:00.000Z',
-    customerName: 'Condomínio Residencial Solar das Águas',
-    customerPhone: '65992441122',
-    pickupCode: 'EXPRESS-1041',
-    estimatedTime: 'Pronto no Balcão Express · Vaga Exclusiva de Embarque',
-    items: [
+    statusHistory: [
       {
-        productId: 'prod-pes-2',
-        sku: 'QMP-302',
-        title: 'Detergente Clorado 5L | 2L',
-        volumeLabel: '5L',
-        unitPrice: 49.90,
-        quantity: 2,
-        subtotal: 99.80,
-      },
-      {
-        productId: 'prod-pes-3',
-        sku: 'QMP-303',
-        title: 'Hipoclorito de Sódio 5L',
-        volumeLabel: '5L',
-        unitPrice: 39.90,
-        quantity: 2,
-        subtotal: 79.80,
-      },
-      {
-        productId: 'prod-lav-6',
-        sku: 'QMP-206',
-        title: 'Água Sanitária 5L | 2L',
-        volumeLabel: '5L',
-        unitPrice: 16.50,
-        quantity: 3,
-        subtotal: 49.50,
+        fromStatus: 'pending_separation',
+        toStatus: 'separating',
+        changedAt: '2026-11-05T11:36:00.000Z',
+        reason: 'Separação de galões e conferência de lacres iniciada',
       },
     ],
-    subtotal: 229.10,
-    deliveryFee: 0,
-    total: 229.10,
-    deliveryType: 'pickup',
-    paymentMethod: 'card',
-    cardSubType: 'credit',
-    status: 'ready_or_out',
   },
   {
     id: '#LMP-1039',
     createdAt: '2026-11-04T16:40:00.000Z',
     customerName: 'Lava Jato Estética Prime (Carlos)',
     customerPhone: '65981123344',
-    pickupCode: 'ROTA-1039',
+    pickupCode: 'PIN-3344',
     estimatedTime: 'Motoboy / Utilitário Limper MT em rota de entrega',
     items: [
       {
@@ -730,7 +787,15 @@ export const INITIAL_ORDERS: Order[] = [
       reference: 'Em frente à concessionária',
     },
     paymentMethod: 'pix',
-    status: 'ready_or_out',
+    status: 'completed',
+    statusHistory: [
+      {
+        fromStatus: 'ready_or_out',
+        toStatus: 'completed',
+        changedAt: '2026-11-04T17:15:00.000Z',
+        reason: 'Entrega confirmada com código PIN-3344',
+      },
+    ],
   },
   {
     id: '#LMP-1035',
@@ -766,13 +831,21 @@ export const INITIAL_ORDERS: Order[] = [
     paymentMethod: 'cash',
     cashChangeFor: 100,
     status: 'completed',
+    statusHistory: [
+      {
+        fromStatus: 'ready_or_out',
+        toStatus: 'completed',
+        changedAt: '2026-10-28T09:34:00.000Z',
+        reason: 'Cliente retirou no Balcão Express em 14 minutos',
+      },
+    ],
   },
 ];
 
 export const INITIAL_KITS: PromoKit[] = [
   {
     id: 'kit-casa',
-    badge: 'KIT CASA PERFUMADA · ECONOMIZE R$ 11,00',
+    badge: 'KIT CASA PERFUMADA · COMBO 3 ITENS',
     title: 'Combo Casa & Aromas (3 Produtos)',
     description:
       'Água p/ Lençol Bambu + Álcool Perfumado Lavanda 5L + Desengordurante Quimi 90 1L para limpeza diária completa.',
@@ -788,7 +861,7 @@ export const INITIAL_KITS: PromoKit[] = [
   },
   {
     id: 'kit-lavanderia',
-    badge: 'KIT LAVANDERIA MENSAL 5L · ECONOMIZE R$ 14,70',
+    badge: 'KIT LAVANDERIA MENSAL 5L · 3 GALÕES',
     title: 'Combo Lavanderia Econômica (3 Galões)',
     description:
       'Amaciante Concentrado 1L (rende 25L) + Água Sanitária 5L + Alvejante sem Cloro 5L para roupas brancas e coloridas.',
@@ -804,7 +877,7 @@ export const INITIAL_KITS: PromoKit[] = [
   },
   {
     id: 'kit-automotivo',
-    badge: 'KIT ESTÉTICA AUTOMOTIVA · ECONOMIZE R$ 15,00',
+    badge: 'KIT ESTÉTICA AUTOMOTIVA · LAVA-JATO',
     title: 'Combo Lava-Jato Profissional (3 Itens)',
     description:
       'Detergente Automotivo com Cera 5L + Gel para Painel 3,5L + Limpa Alumínio 5L de alto brilho e espuma densa.',

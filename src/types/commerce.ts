@@ -1,4 +1,4 @@
-export type UnitOfMeasure = 'L' | 'mL' | 'kg' | 'g' | 'Unid';
+export type UnitOfMeasure = 'L' | 'mL' | 'kg' | 'g' | 'Unid' | 'Kit';
 
 export type ProductStatus = 'active' | 'inactive' | 'out_of_stock';
 
@@ -75,6 +75,21 @@ export type CatalogSortOption =
 
 export type VolumeFilterOption = 'all' | '5L' | '2L_1L' | 'small';
 
+export type OrderDatePreset =
+  | 'all'
+  | 'today'
+  | 'yesterday'
+  | 'last_7_days'
+  | 'last_30_days'
+  | 'custom';
+
+export interface OrderStatusHistoryEntry {
+  fromStatus: OrderStatus;
+  toStatus: OrderStatus;
+  changedAt: string; // ISO string
+  reason?: string;
+}
+
 export interface Order {
   id: string; // ex: "#LMP-1042"
   createdAt: string; // ISO string
@@ -101,6 +116,7 @@ export interface Order {
   cardSubType?: 'credit' | 'debit';
   cashChangeFor?: number | null;
   status: OrderStatus;
+  statusHistory?: OrderStatusHistoryEntry[];
   notes?: string;
 }
 
