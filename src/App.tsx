@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowRight,
+  ArrowUp,
   ArrowUpDown,
+  ChevronRight,
   Clock,
   ExternalLink,
   FilePlus2,
   Filter,
   FlaskConical,
   Gift,
+  History,
   Home as HomeIcon,
   MapPin,
   Menu,
@@ -21,6 +24,8 @@ import {
   Star,
   Store,
   Tally4,
+  Truck,
+  X,
 } from 'lucide-react';
 import {
   CartItem,
@@ -120,6 +125,8 @@ export default function App() {
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([]);
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   useEffect(() => {
     storageService.saveCart(cart);
@@ -128,6 +135,52 @@ export default function App() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activeView]);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setShowScrollTop(window.scrollY > 380);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const trackRecentlyViewed = (productId: string) => {
+    setRecentlyViewedIds((prev) =>
+      [productId, ...prev.filter((id) => id !== productId)].slice(0, 6)
+    );
+  };
+
+  const handleOpenProductDetail = (prod: Product) => {
+    trackRecentlyViewed(prod.id);
+    setDetailProduct(prod);
+  };
+
+  // Unified Home Reset Handler: triggered whenever user clicks the Brand Logo or "Início"
+  const handleGoHome = () => {
+    const hadSubstate =
+      activeView !== 'store' ||
+      Boolean(
+        selectedCategoryId ||
+          searchQuery ||
+          onlyOffers ||
+          onlyFavorites ||
+          volumeFilter !== 'all' ||
+          sortBy !== 'featured'
+      );
+    setActiveView('store');
+    setSelectedCategoryId(null);
+    setSearchQuery('');
+    setOnlyOffers(false);
+    setOnlyFavorites(false);
+    setVolumeFilter('all');
+    setSortBy('featured');
+    setIsMegaMenuOpen(false);
+    setDetailProduct(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (hadSubstate) {
+      showToast('Você voltou para a Vitrine Inicial Limper MT');
+    }
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -188,6 +241,7 @@ export default function App() {
   };
 
   const handleAddToCart = (product: Product) => {
+    trackRecentlyViewed(product.id);
     setCart((prev) => addToCart(prev, product, 1));
     showToast(`${product.title} adicionado à cesta`);
   };
@@ -318,6 +372,7 @@ export default function App() {
       <Header
         activeView={activeView}
         onlyOffers={onlyOffers}
+        hasActiveFilters={hasActiveFilters}
         isMegaMenuOpen={isMegaMenuOpen}
         products={products}
         categories={categories}
@@ -333,15 +388,10 @@ export default function App() {
         }}
         onSelectProduct={(prod) => {
           setActiveView('store');
-          setDetailProduct(prod);
+          handleOpenProductDetail(prod);
         }}
         onAddToCart={handleAddToCart}
-        onSelectStore={() => {
-          setActiveView('store');
-          setOnlyOffers(false);
-          setOnlyFavorites(false);
-          setIsMegaMenuOpen(false);
-        }}
+        onSelectStore={handleGoHome}
         onToggleMegaMenu={() => setIsMegaMenuOpen((prev) => !prev)}
         onSelectOffers={() => {
           setActiveView('store');
@@ -392,7 +442,7 @@ export default function App() {
         }}
         onSelectProduct={(prod) => {
           setActiveView('store');
-          setDetailProduct(prod);
+          handleOpenProductDetail(prod);
         }}
       />
 
@@ -438,7 +488,7 @@ export default function App() {
               onOpenRepeatOrders={() => setActiveView('orders')}
               onOpenQuickOrderModal={() => setIsQuickOrderModalOpen(true)}
               onOpenCepModal={() => setIsCepModalOpen(true)}
-              onSelectProduct={(prod) => setDetailProduct(prod)}
+              onSelectProduct={(prod) => handleOpenProductDetail(prod)}
               onAddToCart={handleAddToCart}
               onApplyCoupon={(code) => {
                 setActiveCouponCode(code);
@@ -535,6 +585,88 @@ export default function App() {
             />
 
             <section className="max-w-[1360px] mx-auto px-3 sm:px-6 py-4 sm:py-6">
+              {/* Interactive Breadcrumb & Active Filter Dismissal Chips */}
+              {hasActiveFilters && (
+                <div className="mb-3 px-3.5 py-2.5 rounded-2xl bg-[#FFFBEB] border border-[#FDE68A] flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleGoHome}
+                      className="inline-flex items-center gap-1 font-extrabold text-[#E3262E] hover:underline cursor-pointer"
+                    >
+                      <HomeIcon className="w-3.5 h-3.5" />
+                      <span>Início</span>
+                    </button>
+                    <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
+                    <span className="font-bold text-zinc-700">Filtros ativos:</span>
+
+                    {selectedCategoryObj && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategoryId(null)}
+                        className="px-2.5 py-1 rounded-full bg-white border border-amber-300 text-zinc-900 font-extrabold text-[11px] inline-flex items-center gap-1 hover:bg-rose-50 hover:border-rose-300 cursor-pointer"
+                      >
+                        <span>Linha: {selectedCategoryObj.shortName}</span>
+                        <X className="w-3 h-3 text-[#E3262E]" />
+                      </button>
+                    )}
+
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="px-2.5 py-1 rounded-full bg-white border border-amber-300 text-zinc-900 font-extrabold text-[11px] inline-flex items-center gap-1 hover:bg-rose-50 hover:border-rose-300 cursor-pointer"
+                      >
+                        <span>Busca: &ldquo;{searchQuery}&rdquo;</span>
+                        <X className="w-3 h-3 text-[#E3262E]" />
+                      </button>
+                    )}
+
+                    {onlyOffers && (
+                      <button
+                        type="button"
+                        onClick={() => setOnlyOffers(false)}
+                        className="px-2.5 py-1 rounded-full bg-white border border-amber-300 text-zinc-900 font-extrabold text-[11px] inline-flex items-center gap-1 hover:bg-rose-50 hover:border-rose-300 cursor-pointer"
+                      >
+                        <span>Somente Ofertas</span>
+                        <X className="w-3 h-3 text-[#E3262E]" />
+                      </button>
+                    )}
+
+                    {onlyFavorites && (
+                      <button
+                        type="button"
+                        onClick={() => setOnlyFavorites(false)}
+                        className="px-2.5 py-1 rounded-full bg-white border border-amber-300 text-zinc-900 font-extrabold text-[11px] inline-flex items-center gap-1 hover:bg-rose-50 hover:border-rose-300 cursor-pointer"
+                      >
+                        <span>Meus Favoritos</span>
+                        <X className="w-3 h-3 text-[#E3262E]" />
+                      </button>
+                    )}
+
+                    {volumeFilter !== 'all' && (
+                      <button
+                        type="button"
+                        onClick={() => setVolumeFilter('all')}
+                        className="px-2.5 py-1 rounded-full bg-white border border-amber-300 text-zinc-900 font-extrabold text-[11px] inline-flex items-center gap-1 hover:bg-rose-50 hover:border-rose-300 cursor-pointer"
+                      >
+                        <span>Embalagem: {volumeFilter}</span>
+                        <X className="w-3 h-3 text-[#E3262E]" />
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleGoHome}
+                    className="px-3 py-1 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] font-extrabold text-[11px] inline-flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    <HomeIcon className="w-3 h-3" />
+                    <span>Voltar para a Vitrine Completa</span>
+                  </button>
+                </div>
+              )}
+
               {/* Active Filter Context Header + Retail Catalog Toolbar (Sorting & Volume Filters) */}
               <div className="bg-white rounded-2xl border border-zinc-200/90 p-3.5 sm:p-4 mb-4 sm:mb-5 shadow-2xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -558,14 +690,7 @@ export default function App() {
                   {hasActiveFilters && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedCategoryId(null);
-                        setSearchQuery('');
-                        setOnlyOffers(false);
-                        setOnlyFavorites(false);
-                        setVolumeFilter('all');
-                        setSortBy('featured');
-                      }}
+                      onClick={handleGoHome}
                       className="text-xs font-extrabold text-[#E3262E] hover:underline cursor-pointer"
                     >
                       Limpar filtros ({products.filter((p) => p.status !== 'inactive').length})
@@ -664,11 +789,62 @@ export default function App() {
                         customerCep={customerProfile.cep}
                         onAdd={handleAddToCart}
                         onUpdateQuantity={handleUpdateCartQty}
-                        onOpenDetail={setDetailProduct}
+                        onOpenDetail={handleOpenProductDetail}
                         onToggleFavorite={handleToggleFavorite}
                       />
                     );
                   })}
+                </div>
+              )}
+
+              {/* Recently Viewed Products Strip ("Vistos Recentemente por Você") */}
+              {recentlyViewedIds.length > 0 && (
+                <div className="mt-6 bg-white rounded-2xl border border-zinc-200/90 p-4 shadow-2xs">
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4 text-[#E3262E]" />
+                      <h3 className="font-display text-sm sm:text-base font-extrabold text-zinc-900">
+                        Vistos Recentemente por Você
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRecentlyViewedIds([])}
+                      className="text-[11px] font-bold text-zinc-400 hover:text-zinc-700 cursor-pointer"
+                    >
+                      Limpar histórico
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                    {recentlyViewedIds
+                      .map((id) => products.find((p) => p.id === id))
+                      .filter((p): p is Product => Boolean(p))
+                      .map((prod) => (
+                        <div
+                          key={`recent-${prod.id}`}
+                          onClick={() => handleOpenProductDetail(prod)}
+                          className="p-2 rounded-xl bg-[#FAFAFA] hover:bg-[#FFFBEB] border border-zinc-200/80 hover:border-[#FFBE00] flex items-center gap-2.5 cursor-pointer transition-all"
+                        >
+                          <div className="w-10 h-10 rounded-lg bg-white border border-zinc-200 overflow-hidden shrink-0">
+                            <ProductImageWithFallback
+                              src={prod.imageUrl}
+                              alt={prod.title}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[11px] font-extrabold text-zinc-900 truncate">
+                              {prod.title}
+                            </div>
+                            <div className="font-mono text-[11px] font-black text-[#E3262E]">
+                              {settings.hideAllPrices || prod.showPrice === false
+                                ? 'Sob consulta'
+                                : formatCurrency(getEffectivePrice(prod))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
                 </div>
               )}
             </section>
@@ -1247,7 +1423,7 @@ export default function App() {
                 `Pedido ${orderId} atualizado para: ${meta.shortLabel}`
               );
             }}
-            onBackToStore={() => setActiveView('store')}
+            onBackToStore={handleGoHome}
           />
         )}
 
@@ -1267,10 +1443,79 @@ export default function App() {
             onSaveBanners={handleSaveBanners}
             onSaveOrders={handleSaveOrders}
             onSaveSettings={handleSaveSettings}
-            onBackToStore={() => setActiveView('store')}
+            onBackToStore={handleGoHome}
           />
         )}
       </main>
+
+      {/* Floating Smart Cart & Free Shipping Bar (iFood / Drogasil Style) */}
+      {activeView === 'store' && cartTotals.itemCount > 0 && !isCartOpen && (
+        <div className="fixed bottom-16 md:bottom-5 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-1.5rem)] max-w-2xl no-print">
+          <div className="bg-[#181A20]/95 backdrop-blur-md text-white rounded-2xl border-2 border-[#FFBE00] p-3 sm:px-5 sm:py-3.5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-[#FFBE00] text-zinc-950 font-mono font-black text-sm flex items-center justify-center shrink-0">
+                {cartTotals.itemCount}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="font-extrabold text-white">
+                    Sua Cesta Limper MT:
+                  </span>
+                  <strong className="font-mono text-sm font-black text-[#FFBE00] tabular-nums">
+                    {settings.hideAllPrices
+                      ? 'Modo Orçamento'
+                      : formatCurrency(cartTotals.subtotal)}
+                  </strong>
+                  {cartTotals.savings > 0 && !settings.hideAllPrices && (
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-bold">
+                      Economia: {formatCurrency(cartTotals.savings)}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-zinc-300 truncate flex items-center gap-1 mt-0.5">
+                  <Truck className="w-3.5 h-3.5 text-[#FFBE00] shrink-0" />
+                  {cartTotals.freeShippingRemaining > 0 ? (
+                    <span>
+                      Faltam{' '}
+                      <strong className="text-[#FFBE00] font-mono">
+                        {formatCurrency(cartTotals.freeShippingRemaining)}
+                      </strong>{' '}
+                      p/ Frete Grátis (ou Retire Grátis em 15min na Loja!)
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400 font-bold">
+                      ✓ Você ganhou Frete Grátis no Delivery ou Retirada 15min!
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsCartOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs inline-flex items-center justify-center gap-1.5 shrink-0 cursor-pointer shadow-sm active:scale-95 transition-transform"
+            >
+              <ShoppingBasket className="w-4 h-4 text-[#E3262E]" />
+              <span>Ver Cesta & Finalizar</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Scroll-To-Top Quick Button */}
+      {showScrollTop && (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          aria-label="Voltar ao topo da página"
+          title="Voltar ao topo"
+          className="fixed bottom-32 md:bottom-20 right-4 z-30 w-10 h-10 rounded-full bg-zinc-950/90 hover:bg-[#E3262E] text-[#FFBE00] hover:text-white border border-[#FFBE00] shadow-lg flex items-center justify-center cursor-pointer transition-all active:scale-90 no-print"
+        >
+          <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+        </button>
+      )}
 
       {/* Mobile Native-App-Like Bottom Tab Bar */}
       <nav
@@ -1279,12 +1524,9 @@ export default function App() {
       >
         <button
           type="button"
-          onClick={() => {
-            setActiveView('store');
-            setIsMegaMenuOpen(false);
-          }}
+          onClick={handleGoHome}
           className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
-            activeView === 'store' && !isMegaMenuOpen
+            activeView === 'store' && !isMegaMenuOpen && !hasActiveFilters
               ? 'text-[#E3262E]'
               : 'text-zinc-500'
           }`}
@@ -1421,16 +1663,21 @@ export default function App() {
       <footer className="bg-white text-zinc-600 border-t border-zinc-200 py-8 no-print">
         <div className="max-w-[1360px] mx-auto px-4 sm:px-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 text-xs">
           <div className="space-y-2">
-            <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleGoHome}
+              title="Voltar para o Início · Limper MT"
+              className="flex items-center gap-3 text-left group cursor-pointer rounded-xl p-1 -ml-1 hover:bg-amber-50/70 transition-colors"
+            >
               <img
                 src={LIMPER_LOGO_URL}
                 alt="Limper MT"
-                className="h-8 w-auto object-contain"
+                className="h-8 w-auto object-contain group-hover:scale-[1.02] transition-transform"
               />
-              <span className="font-display text-sm font-extrabold text-zinc-900">
+              <span className="font-display text-sm font-extrabold text-zinc-900 group-hover:text-[#E3262E] transition-colors">
                 Catálogo Delivery & Central de Retirada Rápida 15min
               </span>
-            </div>
+            </button>
             <div className="flex flex-wrap items-center gap-2 text-zinc-600">
               <MapPin className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
               <strong className="text-zinc-900">Endereço:</strong>

@@ -1081,11 +1081,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <section className="max-w-md mx-auto px-4 py-12">
         <div className="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 shadow-md">
           <div className="flex items-center justify-between mb-5">
-            <img
-              src={LIMPER_LOGO_URL}
-              alt="Limper MT"
-              className="h-9 w-auto object-contain"
-            />
+            <button
+              type="button"
+              onClick={onBackToStore}
+              title="Voltar para a Página Inicial"
+              className="inline-flex items-center gap-2 rounded-xl p-1 -ml-1 hover:bg-amber-50 active:scale-95 transition-all cursor-pointer"
+            >
+              <img
+                src={LIMPER_LOGO_URL}
+                alt="Limper MT"
+                className="h-9 w-auto object-contain"
+              />
+            </button>
             <div className="w-10 h-10 rounded-xl bg-[#FFBE00] text-zinc-950 flex items-center justify-center">
               <Lock className="w-5 h-5" />
             </div>

@@ -6,6 +6,7 @@ import {
   FilePlus2,
   FlaskConical,
   Gift,
+  Home,
   MapPin,
   Menu,
   Package,
@@ -34,6 +35,7 @@ export type ActiveView = 'store' | 'orders' | 'admin';
 interface HeaderProps {
   activeView: ActiveView;
   onlyOffers: boolean;
+  hasActiveFilters?: boolean;
   isMegaMenuOpen: boolean;
   searchQuery: string;
   products: Product[];
@@ -69,6 +71,7 @@ const POPULAR_SEARCH_TERMS = [
 export const Header: React.FC<HeaderProps> = ({
   activeView,
   onlyOffers,
+  hasActiveFilters = false,
   isMegaMenuOpen,
   searchQuery,
   products,
@@ -93,6 +96,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const firstName = customerProfile.name
     ? customerProfile.name.trim().split(' ')[0]
@@ -111,6 +115,33 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Keyboard shortcuts: "/" or Ctrl+K / Cmd+K to focus search; Escape to close search dropdown
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isInputFocused =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+
+      if (
+        ((event.key === '/' && !isInputFocused) ||
+          ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k'))
+      ) {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        setIsSearchOpen(true);
+      } else if (event.key === 'Escape' && isSearchOpen) {
+        setIsSearchOpen(false);
+        searchInputRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isSearchOpen]);
+
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const activeProducts = products.filter((p) => p.status !== 'inactive');
 
@@ -127,8 +158,16 @@ export const Header: React.FC<HeaderProps> = ({
       })
     : activeProducts.filter((p) => p.featured).slice(0, 5);
 
+  const isAwayFromHome = activeView !== 'store' || hasActiveFilters;
+
+  const handleLogoHomeClick = () => {
+    setIsSearchOpen(false);
+    onSelectStore();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
-    <header className="sticky top-0 z-30 bg-white text-zinc-900 border-b border-zinc-200/90 shadow-2xs no-print">
+    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md text-zinc-900 border-b border-zinc-200/90 shadow-2xs no-print transition-all">
       {/* Tier 1: Top Regional, Official Store Address & Phone Strip */}
       <div className="bg-[#181A20] text-white text-[10px] sm:text-[11px]">
         <div className="max-w-[1360px] mx-auto px-3 sm:px-6 h-7 sm:h-8 flex items-center justify-between gap-2 sm:gap-4">
@@ -188,24 +227,29 @@ export const Header: React.FC<HeaderProps> = ({
           Mobile (< md): Row 1 = Logo + Compact Action Icons & Basket; Row 2 = 100% Full-Width Interactive Search Bar
           Desktop (md+): Single Row = Logo + Centered Interactive Search Bar + 4 Icon Actions */}
       <div className="max-w-[1360px] mx-auto px-3 sm:px-6 py-2.5 sm:py-3 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-2.5 gap-x-3 lg:gap-6">
-        {/* 1. Brand Logo */}
-        <a
-          href="#catalogo"
-          onClick={(e) => {
-            e.preventDefault();
-            onSelectStore();
-          }}
-          className="order-1 flex items-center gap-1.5 sm:gap-2 shrink-0 focus-visible:outline-2 focus-visible:outline-[#FFBE00]"
+        {/* 1. Interactive Brand Logo (Always resets filters & returns smoothly to Home top) */}
+        <button
+          type="button"
+          onClick={handleLogoHomeClick}
+          title="Voltar para o Início · Limper MT"
+          aria-label="Limper MT Produtos de Limpeza - Voltar para a Página Inicial"
+          className="order-1 group flex items-center gap-1.5 sm:gap-2 shrink-0 rounded-xl px-1.5 py-1 -ml-1.5 hover:bg-amber-50/80 active:scale-95 transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-[#FFBE00]"
         >
           <img
             src={LIMPER_LOGO_URL}
             alt="Limper MT Produtos de Limpeza"
-            className="h-8 sm:h-11 w-auto object-contain"
+            className="h-8 sm:h-11 w-auto object-contain group-hover:scale-[1.02] transition-transform"
           />
-          <span className="font-display text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-zinc-950 bg-[#FFBE00] px-1.5 py-0.5 rounded-md">
+          <span className="font-display text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-zinc-950 bg-[#FFBE00] group-hover:bg-[#E3262E] group-hover:text-white px-1.5 py-0.5 rounded-md transition-colors">
             MT
           </span>
-        </a>
+          {isAwayFromHome && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 border border-rose-200 text-[#E3262E] text-[10px] font-extrabold animate-fade-in">
+              <Home className="w-3 h-3" />
+              <span className="hidden sm:inline">Voltar ao Início</span>
+            </span>
+          )}
+        </button>
 
         {/* 2. Right Action Links (Order 2 on Mobile so it sits beside Logo; Order 3 on Desktop) */}
         <div className="order-2 md:order-3 flex items-center gap-2 sm:gap-4 lg:gap-5 shrink-0">
@@ -274,7 +318,7 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={onOpenCart}
             aria-label={`Abrir cesta com ${cartItemCount} itens`}
-            className="flex items-center gap-2 sm:gap-2.5 text-left group cursor-pointer px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] hover:bg-[#FFBE00]/30 transition-colors"
+            className="flex items-center gap-2 sm:gap-2.5 text-left group cursor-pointer px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] hover:bg-[#FFBE00]/30 active:scale-95 transition-all"
           >
             <div className="relative">
               <ShoppingBasket className="w-5 h-5 sm:w-6 sm:h-6 text-[#E3262E] shrink-0 stroke-[2]" />
@@ -304,6 +348,7 @@ export const Header: React.FC<HeaderProps> = ({
           </label>
           <div className="relative">
             <input
+              ref={searchInputRef}
               id="header-catalog-search"
               type="text"
               inputMode="search"
@@ -316,7 +361,7 @@ export const Header: React.FC<HeaderProps> = ({
                 setIsSearchOpen(true);
               }}
               placeholder="Buscar produto (ex: Quimi 90, Cloro, Sabão 5L, Amaciante)..."
-              className="w-full pl-4 sm:pl-5 pr-10 sm:pr-11 py-2 sm:py-2.5 bg-[#F1F3F6] hover:bg-[#EAECEF] focus:bg-white border-2 border-zinc-200/80 focus:border-[#FFBE00] rounded-xl sm:rounded-full text-xs sm:text-sm text-zinc-900 placeholder:text-zinc-500 focus:outline-none transition-all shadow-2xs"
+              className="w-full pl-4 sm:pl-5 pr-16 sm:pr-20 py-2 sm:py-2.5 bg-[#F1F3F6] hover:bg-[#EAECEF] focus:bg-white border-2 border-zinc-200/80 focus:border-[#FFBE00] rounded-xl sm:rounded-full text-xs sm:text-sm text-zinc-900 placeholder:text-zinc-500 focus:outline-none transition-all shadow-2xs"
             />
             {searchQuery ? (
               <button
@@ -331,7 +376,12 @@ export const Header: React.FC<HeaderProps> = ({
                 <X className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <Search className="w-4 h-4 text-[#E3262E] absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 pointer-events-none stroke-[2.4]" />
+              <div className="absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
+                <kbd className="hidden lg:inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-mono font-bold text-zinc-400 bg-white border border-zinc-200 rounded shadow-2xs">
+                  /
+                </kbd>
+                <Search className="w-4 h-4 text-[#E3262E] stroke-[2.4]" />
+              </div>
             )}
           </div>
 
@@ -509,6 +559,20 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="border-t border-zinc-100 bg-white">
         <div className="max-w-[1360px] mx-auto px-3 sm:px-6 h-10 sm:h-11 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
           <div className="flex items-center gap-3 sm:gap-4 xl:gap-5 text-xs font-medium text-zinc-700 whitespace-nowrap">
+            {/* Explicit Home / Início button */}
+            <button
+              type="button"
+              onClick={handleLogoHomeClick}
+              className={`inline-flex items-center gap-1.5 font-extrabold transition-colors cursor-pointer shrink-0 text-[11px] sm:text-xs px-2.5 py-1 rounded-lg ${
+                !isAwayFromHome
+                  ? 'bg-zinc-900 text-[#FFBE00]'
+                  : 'text-zinc-800 hover:text-[#E3262E] hover:bg-rose-50'
+              }`}
+            >
+              <Home className="w-3.5 h-3.5 shrink-0" />
+              <span>Início</span>
+            </button>
+
             {/* Insira seu CEP */}
             <button
               type="button"
