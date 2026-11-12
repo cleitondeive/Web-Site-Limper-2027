@@ -21,6 +21,14 @@ export interface Category {
   order: number;
 }
 
+export interface KitComponentSnapshot {
+  productId: string;
+  sku: string;
+  title: string;
+  volumeLabel: string;
+  quantity: number;
+}
+
 export interface Product {
   id: string;
   sku: string;
@@ -30,6 +38,8 @@ export interface Product {
   price: number; // Preço regular ("De")
   promoPrice?: number | null; // Preço promocional ("Por")
   showPrice?: boolean; // Se false, oculta o preço no catálogo ("Valor sob consulta")
+  installmentsCount?: number; // Parcelamento configurado no Admin (ex: 3x, 6x, 12x)
+  installmentsNoInterest?: boolean; // true = s/ juros
   unit: UnitOfMeasure;
   volumeLabel: string; // ex: "5L | 2L", "5L", "1L", "500mL"
   status: ProductStatus;
@@ -38,6 +48,7 @@ export interface Product {
   dilutionHint?: string; // ex: "Rende até 50 Litros"
   badgeLabel?: string; // ex: "Ofertas do Mês | Limper MT"
   subBadgeLabel?: string; // ex: "Preço Exclusivo Site | Quimiprol"
+  kitItems?: KitComponentSnapshot[]; // Produtos inclusos quando o item é um Kit/Combo
 }
 
 export interface CartItem {
@@ -47,7 +58,11 @@ export interface CartItem {
 
 export type DeliveryType = 'delivery' | 'pickup';
 
-export type PaymentMethod = 'pix' | 'card' | 'cash';
+export type LogisticsDeliveryMode = 'moto_limper' | 'truck' | 'interior_mt' | 'pickup';
+
+export type DeliveryCityOption = 'Cuiabá' | 'Várzea Grande' | 'Interior de MT';
+
+export type PaymentMethod = 'pix' | 'card' | 'cash' | 'quote';
 
 export type OrderStatus =
   | 'pending_separation' // Pedido Recebido / Na Fila de Separação
@@ -64,6 +79,7 @@ export interface OrderItemSnapshot {
   quantity: number;
   subtotal: number;
   priceHidden?: boolean;
+  kitItems?: KitComponentSnapshot[];
 }
 
 export type CatalogSortOption =
@@ -102,13 +118,15 @@ export interface Order {
   discountAmount?: number;
   total: number;
   deliveryType: DeliveryType;
+  logisticsMode?: LogisticsDeliveryMode;
   pickupCode?: string; // ex: "BALCÃO-42"
   estimatedTime?: string; // ex: "Pronto em 15 min no Balcão Express"
   address?: {
     street: string;
     number: string;
     neighborhood: string;
-    city: 'Cuiabá' | 'Várzea Grande';
+    city: DeliveryCityOption;
+    interiorCityName?: string;
     reference?: string;
     cep?: string;
   };
@@ -118,6 +136,7 @@ export interface Order {
   status: OrderStatus;
   statusHistory?: OrderStatusHistoryEntry[];
   notes?: string;
+  isQuoteOnly?: boolean; // true quando enviado como lista sem valor (orçamento WhatsApp)
 }
 
 export interface CustomerProfile {
@@ -129,7 +148,8 @@ export interface CustomerProfile {
   street: string;
   number: string;
   neighborhood: string;
-  city: 'Cuiabá' | 'Várzea Grande';
+  city: DeliveryCityOption;
+  interiorCityName?: string;
   reference: string;
   isRegistered?: boolean;
   clubDiscountActive?: boolean;
@@ -153,7 +173,14 @@ export interface StoreSettings {
   storeAddress: string;
   freeShippingThreshold: number;
   defaultDeliveryFee: number;
+  motoLimperVgMin?: number; // Moto Limper pequenos itens - Várzea Grande-MT
+  motoLimperCbaMin?: number; // Moto Limper pequenos itens - Cuiabá-MT
+  truckVgMin?: number; // Entrega de caminhão - Várzea Grande-MT
+  truckCbaMin?: number; // Entrega de caminhão - Cuiabá-MT
+  interiorMtNote?: string; // Texto de orientação para restante do estado de MT via WhatsApp
   hideAllPrices?: boolean; // Permite ocultar todos os preços da loja (Modo Cotação/Orçamento)
+  defaultInstallmentsCount?: number; // Parcelamento padrão quando preços visíveis
+  defaultInstallmentsNoInterest?: boolean; // true = s/ juros
   neighborhoodFees: NeighborhoodFee[];
 }
 
@@ -185,7 +212,11 @@ export interface PromoCoupon {
 }
 
 export type BannerSlotType = 'hero_carousel' | 'bottom_banner';
-export type BannerThemeType = 'yellow_red' | 'dark_gold' | 'crimson_wine';
+export type BannerThemeType =
+  | 'yellow_red'
+  | 'dark_gold'
+  | 'crimson_wine'
+  | 'logistics_fleet';
 
 export interface PromoBanner {
   id: string;

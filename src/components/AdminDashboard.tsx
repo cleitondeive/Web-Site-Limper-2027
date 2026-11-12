@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Bike,
   Calendar,
   Check,
   Clock,
@@ -62,10 +63,15 @@ import {
   ORDER_STATUS_META,
   filterOrdersByCriteria,
   formatCurrency,
+  formatLogisticsModeLabel,
   formatPaymentMethodLabel,
   formatPhone,
   getAdjacentOrderStatus,
   getEffectivePrice,
+  getLogisticsSettings,
+  getProductInstallmentMeta,
+  isOrderQuoteOnly,
+  isProductPriceVisible,
   normalizePhone,
   summarizeOrdersPeriod,
   toDateKeyYmd,
@@ -150,6 +156,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<AdminAppTab>('kanban');
   const [adminProductSearch, setAdminProductSearch] = useState('');
   const [adminCategoryFilter, setAdminCategoryFilter] = useState<string>('all');
+  const [adminPriceFilter, setAdminPriceFilter] = useState<'all' | 'visible' | 'hidden'>('all');
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
 
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
 
@@ -173,7 +181,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [prodCatId, setProdCatId] = useState(categories[0]?.id || 'cat-casa');
   const [prodPrice, setProdPrice] = useState('29.90');
   const [prodPromoPrice, setProdPromoPrice] = useState('24.90');
-  const [prodShowPrice, setProdShowPrice] = useState<boolean>(true);
+  const [prodInstallmentsCount, setProdInstallmentsCount] = useState<string>('3');
+  const [prodInstallmentsNoInterest, setProdInstallmentsNoInterest] = useState<boolean>(true);
+  const [prodShowPrice, setProdShowPrice] = useState<boolean>(false);
   const [prodUnit, setProdUnit] = useState<UnitOfMeasure>('L');
   const [prodVolLabel, setProdVolLabel] = useState('5L');
   const [prodStatus, setProdStatus] = useState<ProductStatus>('active');
@@ -196,7 +206,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [kitBadge, setKitBadge] = useState('KIT ECONÔMICO LIMPER MT');
   const [kitDesc, setKitDesc] = useState('');
   const [kitPromoPrice, setKitPromoPrice] = useState('59.90');
-  const [kitShowPrice, setKitShowPrice] = useState<boolean>(true);
+  const [kitShowPrice, setKitShowPrice] = useState<boolean>(false);
   const [kitActive, setKitActive] = useState<boolean>(true);
   const [kitImage, setKitImage] = useState(GENERATED_IMAGES.prodCasa);
   const [kitImageUploadStatus, setKitImageUploadStatus] = useState<string | null>(null);
@@ -242,6 +252,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newNeighborhoodName, setNewNeighborhoodName] = useState('');
   const [newNeighborhoodCity, setNewNeighborhoodCity] = useState<'Cuiabá' | 'Várzea Grande'>('Várzea Grande');
   const [newNeighborhoodFee, setNewNeighborhoodFee] = useState('8.00');
+
+  useEffect(() => {
+    setFormSettings(settings);
+  }, [settings]);
 
   // Kanban & Order History Filter + Undo State
   const [kanbanViewMode, setKanbanViewMode] = useState<'board' | 'history_table'>('board');
@@ -431,7 +445,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProdCatId(categories[0]?.id || 'cat-casa');
     setProdPrice('39.90');
     setProdPromoPrice('32.90');
-    setProdShowPrice(true);
+    setProdInstallmentsCount(String(settings.defaultInstallmentsCount ?? 3));
+    setProdInstallmentsNoInterest(settings.defaultInstallmentsNoInterest ?? true);
+    setProdShowPrice(false);
     setProdUnit('L');
     setProdVolLabel('5L');
     setProdStatus('active');
@@ -451,7 +467,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProdCatId(product.categoryId);
     setProdPrice(String(product.price));
     setProdPromoPrice(product.promoPrice ? String(product.promoPrice) : '');
-    setProdShowPrice(product.showPrice !== false);
+    setProdInstallmentsCount(
+      String(product.installmentsCount ?? settings.defaultInstallmentsCount ?? 3)
+    );
+    setProdInstallmentsNoInterest(
+      product.installmentsNoInterest ?? settings.defaultInstallmentsNoInterest ?? true
+    );
+    setProdShowPrice(isProductPriceVisible(product, settings));
     setProdUnit(product.unit);
     setProdVolLabel(product.volumeLabel);
     setProdStatus(product.status);
@@ -494,30 +516,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const promoNum = prodPromoPrice.trim()
       ? Number(prodPromoPrice.replace(',', '.'))
       : null;
+    const installmentsCountNum = Math.max(
+      1,
+      Math.min(12, Math.round(Number(prodInstallmentsCount) || 3))
+    );
 
-    let targetProdId = editingProduct ? editingProduct.id : `prod-${Date.now()}`;
+    const targetProdId = editingProduct ? editingProduct.id : `prod-${Date.now()}`;
+    const unlockingLegacyGlobalHide = prodShowPrice && settings.hideAllPrices;
+
+    if (unlockingLegacyGlobalHide) {
+      const unlockedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(unlockedSettings);
+      onSaveSettings(unlockedSettings);
+      onSaveKits(kits.map((k) => ({ ...k, showPrice: false })));
+    }
 
     if (editingProduct) {
-      const updated = products.map((p) =>
-        p.id === editingProduct.id
-          ? {
-              ...p,
-              title: prodTitle.trim(),
-              sku: prodSku.trim(),
-              description: prodDesc.trim(),
-              categoryId: prodCatId,
-              price: priceNum,
-              promoPrice: promoNum,
-              showPrice: prodShowPrice,
-              unit: prodUnit,
-              volumeLabel: prodVolLabel.trim(),
-              status: prodStatus,
-              imageUrl: prodImage.trim() || GENERATED_IMAGES.prodLimpezaPesada,
-              dilutionHint: prodDilution.trim() || undefined,
-              badgeLabel: prodBadgeLabel.trim() || undefined,
-            }
-          : p
-      );
+      const updated = products.map((p) => {
+        if (p.id === editingProduct.id) {
+          return {
+            ...p,
+            title: prodTitle.trim(),
+            sku: prodSku.trim(),
+            description: prodDesc.trim(),
+            categoryId: prodCatId,
+            price: priceNum,
+            promoPrice: promoNum,
+            installmentsCount: installmentsCountNum,
+            installmentsNoInterest: prodInstallmentsNoInterest,
+            showPrice: prodShowPrice,
+            unit: prodUnit,
+            volumeLabel: prodVolLabel.trim(),
+            status: prodStatus,
+            imageUrl: prodImage.trim() || GENERATED_IMAGES.prodLimpezaPesada,
+            dilutionHint: prodDilution.trim() || undefined,
+            badgeLabel: prodBadgeLabel.trim() || undefined,
+          };
+        }
+        return unlockingLegacyGlobalHide ? { ...p, showPrice: false } : p;
+      });
       onSaveProducts(updated);
     } else {
       const newProd: Product = {
@@ -528,6 +568,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         categoryId: prodCatId,
         price: priceNum,
         promoPrice: promoNum,
+        installmentsCount: installmentsCountNum,
+        installmentsNoInterest: prodInstallmentsNoInterest,
         showPrice: prodShowPrice,
         unit: prodUnit,
         volumeLabel: prodVolLabel.trim() || '5L',
@@ -536,7 +578,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         dilutionHint: prodDilution.trim() || undefined,
         badgeLabel: prodBadgeLabel.trim() || undefined,
       };
-      onSaveProducts([newProd, ...products]);
+      const baseProducts = unlockingLegacyGlobalHide
+        ? products.map((p) => ({ ...p, showPrice: false }))
+        : products;
+      onSaveProducts([newProd, ...baseProducts]);
     }
 
     // Update Banner placements if onSaveBanners is wired
@@ -578,23 +623,99 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleToggleProductPriceVisibility = (product: Product) => {
-    const nextShow = product.showPrice === false ? true : false;
+    const currentlyVisible = isProductPriceVisible(product, settings);
+    const nextShow = !currentlyVisible;
+
+    if (settings.hideAllPrices && nextShow) {
+      const updatedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(updatedSettings);
+      onSaveSettings(updatedSettings);
+      onSaveKits(kits.map((k) => ({ ...k, showPrice: false })));
+      onSaveProducts(
+        products.map((p) => ({
+          ...p,
+          showPrice: p.id === product.id ? true : false,
+        }))
+      );
+      return;
+    }
+
     onSaveProducts(
-      products.map((p) => (p.id === product.id ? { ...p, showPrice: nextShow } : p))
+      products.map((p) =>
+        p.id === product.id ? { ...p, showPrice: nextShow } : p
+      )
     );
   };
 
-  const handleToggleGlobalHidePrices = () => {
-    const nextHide = !settings.hideAllPrices;
-    const updatedSettings: StoreSettings = {
-      ...settings,
-      hideAllPrices: nextHide,
-    };
-    setFormSettings(updatedSettings);
-    onSaveSettings(updatedSettings);
+  const handleHideAllProductPrices = () => {
+    onSaveProducts(products.map((p) => ({ ...p, showPrice: false })));
+    onSaveKits(kits.map((k) => ({ ...k, showPrice: false })));
+    if (settings.hideAllPrices) {
+      const updatedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(updatedSettings);
+      onSaveSettings(updatedSettings);
+    }
+    setSelectedProductIds([]);
+  };
+
+  const handleShowAllProductPrices = () => {
+    onSaveProducts(products.map((p) => ({ ...p, showPrice: true })));
+    onSaveKits(kits.map((k) => ({ ...k, showPrice: true })));
+    if (settings.hideAllPrices) {
+      const updatedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(updatedSettings);
+      onSaveSettings(updatedSettings);
+    }
+    setSelectedProductIds([]);
+  };
+
+  const handleToggleSelectProduct = (productId: string) => {
+    setSelectedProductIds((prev) =>
+      prev.includes(productId)
+        ? prev.filter((id) => id !== productId)
+        : [...prev, productId]
+    );
+  };
+
+  const handleBatchSetProductPrices = (show: boolean) => {
+    if (selectedProductIds.length === 0) return;
+    const selectedSet = new Set(selectedProductIds);
+
+    if (show && settings.hideAllPrices) {
+      const updatedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(updatedSettings);
+      onSaveSettings(updatedSettings);
+      onSaveKits(kits.map((k) => ({ ...k, showPrice: false })));
+      onSaveProducts(
+        products.map((p) => ({
+          ...p,
+          showPrice: selectedSet.has(p.id) ? true : false,
+        }))
+      );
+    } else {
+      onSaveProducts(
+        products.map((p) =>
+          selectedSet.has(p.id) ? { ...p, showPrice: show } : p
+        )
+      );
+    }
+    setSelectedProductIds([]);
   };
 
   const handleDeleteProduct = (productId: string) => {
+    setSelectedProductIds((prev) => prev.filter((id) => id !== productId));
     onSaveProducts(products.filter((p) => p.id !== productId));
   };
 
@@ -605,7 +726,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setKitBadge('KIT PROMOCIONAL LIMPER MT');
     setKitDesc('');
     setKitPromoPrice('64.90');
-    setKitShowPrice(true);
+    setKitShowPrice(false);
     setKitActive(true);
     setKitImage(GENERATED_IMAGES.prodCasa);
     setKitImageUploadStatus(null);
@@ -622,7 +743,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setKitBadge(kit.badge);
     setKitDesc(kit.description);
     setKitPromoPrice(String(kit.promoPrice));
-    setKitShowPrice(kit.showPrice !== false);
+    setKitShowPrice(!settings.hideAllPrices && kit.showPrice !== false);
     setKitActive(kit.active);
     setKitImage(kit.imageUrl || GENERATED_IMAGES.prodCasa);
     setKitImageUploadStatus(null);
@@ -672,23 +793,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }, 0);
 
     const promoNum = Number(kitPromoPrice.replace(',', '.')) || regularSum;
+    const unlockingLegacyGlobalHide = kitShowPrice && settings.hideAllPrices;
+
+    if (unlockingLegacyGlobalHide) {
+      const updatedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(updatedSettings);
+      onSaveSettings(updatedSettings);
+      onSaveProducts(products.map((p) => ({ ...p, showPrice: false })));
+    }
 
     if (editingKit) {
-      const updated = kits.map((k) =>
-        k.id === editingKit.id
-          ? {
-              ...k,
-              title: kitTitle.trim(),
-              badge: kitBadge.trim() || 'KIT LIMPER MT',
-              description: kitDesc.trim(),
-              imageUrl: kitImage.trim() || GENERATED_IMAGES.prodCasa,
-              items: selectedItems,
-              promoPrice: promoNum,
-              showPrice: kitShowPrice,
-              active: kitActive,
-            }
-          : k
-      );
+      const updated = kits.map((k) => {
+        if (k.id === editingKit.id) {
+          return {
+            ...k,
+            title: kitTitle.trim(),
+            badge: kitBadge.trim() || 'KIT LIMPER MT',
+            description: kitDesc.trim(),
+            imageUrl: kitImage.trim() || GENERATED_IMAGES.prodCasa,
+            items: selectedItems,
+            promoPrice: promoNum,
+            showPrice: kitShowPrice,
+            active: kitActive,
+          };
+        }
+        return unlockingLegacyGlobalHide ? { ...k, showPrice: false } : k;
+      });
       onSaveKits(updated);
     } else {
       const newKit: PromoKit = {
@@ -710,7 +843,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         showPrice: kitShowPrice,
         active: kitActive,
       };
-      onSaveKits([newKit, ...kits]);
+      const baseKits = unlockingLegacyGlobalHide
+        ? kits.map((k) => ({ ...k, showPrice: false }))
+        : kits;
+      onSaveKits([newKit, ...baseKits]);
     }
 
     setIsKitFormOpen(false);
@@ -719,6 +855,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleToggleKitActive = (kit: PromoKit) => {
     onSaveKits(kits.map((k) => (k.id === kit.id ? { ...k, active: !k.active } : k)));
+  };
+
+  const handleToggleKitPriceVisibility = (kit: PromoKit) => {
+    const currentlyVisible = !settings.hideAllPrices && kit.showPrice !== false;
+    const nextShow = !currentlyVisible;
+
+    if (settings.hideAllPrices && nextShow) {
+      const updatedSettings: StoreSettings = {
+        ...settings,
+        hideAllPrices: false,
+      };
+      setFormSettings(updatedSettings);
+      onSaveSettings(updatedSettings);
+      onSaveProducts(products.map((p) => ({ ...p, showPrice: false })));
+      onSaveKits(
+        kits.map((k) => ({
+          ...k,
+          showPrice: k.id === kit.id ? true : false,
+        }))
+      );
+      return;
+    }
+
+    onSaveKits(
+      kits.map((k) => (k.id === kit.id ? { ...k, showPrice: nextShow } : k))
+    );
   };
 
   const handleDeleteKit = (kitId: string) => {
@@ -1031,18 +1193,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const totalRevenue = orders.reduce((acc, o) => acc + o.total, 0);
   const activeOrdersCount = orders.filter((o) => o.status !== 'completed').length;
   const activeProductsCount = products.filter((p) => p.status === 'active').length;
-  const visiblePriceCount = products.filter((p) => p.showPrice !== false).length;
+  const visiblePriceCount = products.filter((p) => isProductPriceVisible(p, settings)).length;
 
   // Filtered Admin Products
   const filteredAdminProducts = products.filter((p) => {
     const matchesCat = adminCategoryFilter === 'all' || p.categoryId === adminCategoryFilter;
+    const isVisible = isProductPriceVisible(p, settings);
+    const matchesPriceFilter =
+      adminPriceFilter === 'all' ||
+      (adminPriceFilter === 'visible' ? isVisible : !isVisible);
     const q = adminProductSearch.trim().toLowerCase();
     const matchesSearch =
       !q ||
       p.title.toLowerCase().includes(q) ||
       p.sku.toLowerCase().includes(q);
-    return matchesCat && matchesSearch;
+    return matchesCat && matchesPriceFilter && matchesSearch;
   });
+
+  const allFilteredSelected =
+    filteredAdminProducts.length > 0 &&
+    filteredAdminProducts.every((p) => selectedProductIds.includes(p.id));
+
+  const handleToggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      const filteredSet = new Set(filteredAdminProducts.map((p) => p.id));
+      setSelectedProductIds((prev) => prev.filter((id) => !filteredSet.has(id)));
+    } else {
+      setSelectedProductIds((prev) => {
+        const merged = new Set(prev);
+        filteredAdminProducts.forEach((p) => merged.add(p.id));
+        return Array.from(merged);
+      });
+    }
+  };
 
   // Aggregated Customers for CRM Tab
   const customerMap = new Map<
@@ -1370,15 +1553,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Exibição de Preços
                 </p>
                 <p className="font-mono text-base font-extrabold text-zinc-950 mt-0.5">
-                  {settings.hideAllPrices ? 'Modo Orçamento' : `${visiblePriceCount} visíveis`}
+                  {visiblePriceCount === 0
+                    ? 'Todos Sem Valor'
+                    : `${visiblePriceCount} / ${products.length} visíveis`}
                 </p>
-                <button
-                  type="button"
-                  onClick={handleToggleGlobalHidePrices}
-                  className="text-[11px] font-bold text-[#E3262E] hover:underline mt-0.5 cursor-pointer"
-                >
-                  {settings.hideAllPrices ? 'Reativar preços' : 'Modo Sob Consulta'}
-                </button>
+                <div className="flex items-center gap-2.5 mt-0.5">
+                  {visiblePriceCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleHideAllProductPrices}
+                      className="text-[11px] font-bold text-[#E3262E] hover:underline cursor-pointer"
+                    >
+                      Ocultar Todos
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleShowAllProductPrices}
+                      className="text-[11px] font-bold text-[#B45309] hover:underline cursor-pointer"
+                    >
+                      Exibir Todos
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('products')}
+                    className="text-[11px] font-bold text-zinc-600 hover:text-zinc-950 hover:underline cursor-pointer"
+                  >
+                    Escolher Itens
+                  </button>
+                </div>
               </div>
               <div className="w-10 h-10 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] text-zinc-950 flex items-center justify-center">
                 <Eye className="w-5 h-5" />
@@ -1940,9 +2144,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                           {orderDateFormatted}
                                         </span>
                                       </div>
-                                      <span className="font-mono font-extrabold text-zinc-950 tabular-nums text-sm">
-                                        {formatCurrency(order.total)}
-                                      </span>
+                                      {isOrderQuoteOnly(order) ? (
+                                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 font-mono text-[10px] font-extrabold text-emerald-800">
+                                          Orçamento s/ Valor
+                                        </span>
+                                      ) : (
+                                        <span className="font-mono font-extrabold text-zinc-950 tabular-nums text-sm">
+                                          {formatCurrency(order.total)}
+                                        </span>
+                                      )}
                                     </div>
 
                                     {/* Customer & Modality */}
@@ -1970,26 +2180,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                           </span>
                                         )}
                                       </div>
+                                      {order.deliveryType === 'delivery' && order.logisticsMode && (
+                                        <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-900">
+                                          <span>
+                                            {formatLogisticsModeLabel(
+                                              order.logisticsMode,
+                                              order.address?.interiorCityName
+                                            )}
+                                          </span>
+                                        </div>
+                                      )}
                                     </div>
 
                                     {/* Items List */}
-                                    <div className="text-[11px] text-zinc-700 space-y-1 bg-white p-2.5 rounded-lg border border-zinc-200/70">
-                                      {order.items.map((item, idx) => (
-                                        <div
-                                          key={`${order.id}-${idx}`}
-                                          className="flex justify-between gap-2"
-                                        >
-                                          <span className="truncate">
-                                            <strong className="font-mono">
-                                              {item.quantity}x
-                                            </strong>{' '}
-                                            {item.title}
-                                          </span>
-                                          <span className="font-mono shrink-0">
-                                            {item.volumeLabel}
-                                          </span>
-                                        </div>
-                                      ))}
+                                    <div className="text-[11px] text-zinc-700 space-y-1.5 bg-white p-2.5 rounded-lg border border-zinc-200/70">
+                                      {order.items.map((item, idx) => {
+                                        const kitBreakdown =
+                                          item.kitItems && item.kitItems.length > 0
+                                            ? item.kitItems
+                                            : kits
+                                                .find((k) => k.id === item.productId)
+                                                ?.items.map((ki) => {
+                                                  const p = products.find(
+                                                    (pr) => pr.id === ki.productId
+                                                  );
+                                                  return p
+                                                    ? {
+                                                        productId: p.id,
+                                                        sku: p.sku,
+                                                        title: p.title,
+                                                        volumeLabel: p.volumeLabel,
+                                                        quantity: ki.quantity,
+                                                      }
+                                                    : null;
+                                                })
+                                                .filter((x): x is NonNullable<typeof x> =>
+                                                  Boolean(x)
+                                                ) || [];
+                                        return (
+                                          <div
+                                            key={`${order.id}-${idx}`}
+                                            className="space-y-0.5"
+                                          >
+                                            <div className="flex justify-between gap-2">
+                                              <span className="truncate font-semibold">
+                                                <strong className="font-mono">
+                                                  {item.quantity}x
+                                                </strong>{' '}
+                                                {item.title}
+                                              </span>
+                                              <span className="font-mono shrink-0">
+                                                {item.volumeLabel}
+                                              </span>
+                                            </div>
+                                            {kitBreakdown.length > 0 && (
+                                              <div className="pl-2.5 ml-1 border-l-2 border-amber-300 text-[10px] text-zinc-600 space-y-0.5">
+                                                {kitBreakdown.map((sub, sIdx) => (
+                                                  <div
+                                                    key={`${order.id}-${idx}-sub-${sIdx}`}
+                                                    className="flex justify-between gap-1.5"
+                                                  >
+                                                    <span className="truncate">
+                                                      +{' '}
+                                                      <strong className="font-mono">
+                                                        {sub.quantity * item.quantity}x
+                                                      </strong>{' '}
+                                                      {sub.title}
+                                                    </span>
+                                                    <span className="font-mono shrink-0">
+                                                      {sub.volumeLabel}
+                                                    </span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
                                     </div>
 
                                     {/* DIRECT 4-STAGE QUICK JUMP PILLS ("Ir direto p/ etapa correta se passou todas sem querer") */}
@@ -2248,7 +2515,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </div>
                                 </td>
                                 <td className="py-3 px-4 font-mono font-extrabold text-zinc-950 whitespace-nowrap">
-                                  {formatCurrency(ord.total)}
+                                  {isOrderQuoteOnly(ord) ? (
+                                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[10px] text-emerald-800">
+                                      Orçamento s/ Valor
+                                    </span>
+                                  ) : (
+                                    formatCurrency(ord.total)
+                                  )}
                                 </td>
                                 <td className="py-3 px-4">
                                   <div className="flex items-center gap-1.5">
@@ -2357,18 +2630,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="space-y-5 no-print">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-zinc-200">
                 <div>
-                  <h2 className="font-display text-lg font-extrabold text-zinc-900">
-                    Catálogo de Produtos Quimiprol ({products.length})
-                  </h2>
-                  <p className="text-xs text-zinc-500">
-                    Cadastre produtos com foto via Link URL ou Upload (JPG, PNG, WEBP), marque destaques com ★ e escolha se o valor aparece ou fica oculto.
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="font-display text-lg font-extrabold text-zinc-900">
+                      Catálogo de Produtos Quimiprol ({products.length})
+                    </h2>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-md font-mono text-[11px] font-extrabold border ${
+                        visiblePriceCount > 0
+                          ? 'bg-[#FFFBEB] border-[#FFBE00] text-zinc-950'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      }`}
+                    >
+                      {visiblePriceCount} de {products.length} com valor visível
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    Clique em qualquer produto para mostrar/ocultar somente o valor dele, marque vários itens para editar em lote ou use os botões globais.
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={handleExportProductsCsv}
-                    className="px-3.5 py-2.5 rounded-xl text-xs font-bold border border-zinc-300 bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-800 inline-flex items-center gap-1.5 cursor-pointer"
+                    className="px-3 py-2 rounded-xl text-xs font-bold border border-zinc-300 bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-800 inline-flex items-center gap-1.5 cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5 text-[#D97706]" />
                     <span>Exportar CSV</span>
@@ -2376,22 +2660,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     type="button"
-                    onClick={handleToggleGlobalHidePrices}
-                    className={`px-3.5 py-2.5 rounded-xl text-xs font-extrabold border transition-colors cursor-pointer ${
-                      settings.hideAllPrices
+                    onClick={handleHideAllProductPrices}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition-colors cursor-pointer ${
+                      visiblePriceCount === 0
                         ? 'bg-[#E3262E] text-white border-[#E3262E]'
-                        : 'bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-800 border-zinc-300'
+                        : 'bg-rose-50 hover:bg-rose-100 text-[#E3262E] border-rose-200'
                     }`}
                   >
-                    {settings.hideAllPrices
-                      ? 'Modo Orçamento Ativo · Clique p/ Exibir'
-                      : 'Ocultar Todos os Valores da Loja'}
+                    Ocultar Valores de Todos
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleShowAllProductPrices}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition-colors cursor-pointer ${
+                      visiblePriceCount === products.length && products.length > 0
+                        ? 'bg-zinc-950 text-[#FFBE00] border-zinc-950'
+                        : 'bg-[#FFFBEB] hover:bg-[#FEF3C7] text-zinc-950 border-[#FFBE00]'
+                    }`}
+                  >
+                    Exibir Valores em Todos
                   </button>
 
                   <button
                     type="button"
                     onClick={openCreateProduct}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs sm:text-sm rounded-xl cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs sm:text-sm rounded-xl cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Novo Produto</span>
@@ -2526,6 +2820,103 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* PARCELAMENTO CONFIGURÁVEL + AVISO DO MODO SEM VALOR */}
+                  {(() => {
+                    const basePriceNum = Number(prodPrice.replace(',', '.')) || 0;
+                    const promoNum = prodPromoPrice.trim()
+                      ? Number(prodPromoPrice.replace(',', '.'))
+                      : null;
+                    const previewMeta = getProductInstallmentMeta(
+                      {
+                        id: 'preview',
+                        sku: prodSku || 'QMP',
+                        title: prodTitle || 'Produto',
+                        description: '',
+                        categoryId: prodCatId,
+                        price: basePriceNum,
+                        promoPrice: promoNum,
+                        installmentsCount: Math.max(
+                          1,
+                          Math.min(12, Math.round(Number(prodInstallmentsCount) || 3))
+                        ),
+                        installmentsNoInterest: prodInstallmentsNoInterest,
+                        unit: prodUnit,
+                        volumeLabel: prodVolLabel || '5L',
+                        status: prodStatus,
+                        imageUrl: prodImage,
+                      },
+                      settings
+                    );
+
+                    return (
+                      <div className="p-4 rounded-2xl bg-[#FFFBEB] border border-[#FDE68A] space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="text-[11px] font-mono uppercase font-extrabold text-[#B45309] block">
+                              CONDIÇÕES DE PARCELAMENTO &amp; VISIBILIDADE INDIVIDUAL
+                            </span>
+                            <p className="text-xs text-zinc-600">
+                              Defina o preço, o parcelamento e escolha abaixo em &ldquo;Exibição do Valor no Site&rdquo; se este produto exibirá valor R$ ou ficará &ldquo;Sob Consulta&rdquo; sem afetar os demais.
+                            </p>
+                          </div>
+                          <span
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold border ${
+                              prodShowPrice
+                                ? 'bg-white border-[#FFBE00] text-zinc-950'
+                                : 'bg-rose-50 border-rose-200 text-[#E3262E]'
+                            }`}
+                          >
+                            {prodShowPrice ? 'Somente este produto: Valor Visível' : 'Somente este produto: Sem Valor'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                          <div>
+                            <label className="block text-xs font-bold text-zinc-700 mb-1">
+                              Parcelamento Máximo
+                            </label>
+                            <select
+                              value={prodInstallmentsCount}
+                              onChange={(e) => setProdInstallmentsCount(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
+                            >
+                              {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => (
+                                <option key={n} value={String(n)}>
+                                  {n === 1 ? '1x (Somente à vista)' : `${n}x no Cartão`}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-zinc-700 mb-1">
+                              Juros do Parcelamento
+                            </label>
+                            <select
+                              value={prodInstallmentsNoInterest ? 'no_interest' : 'with_card'}
+                              onChange={(e) =>
+                                setProdInstallmentsNoInterest(e.target.value === 'no_interest')
+                              }
+                              className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
+                            >
+                              <option value="no_interest">Sem juros (s/ juros)</option>
+                              <option value="with_card">No cartão (c/ taxa operadora)</option>
+                            </select>
+                          </div>
+
+                          <div className="px-3 py-2 rounded-xl bg-white border border-zinc-200 flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold text-zinc-500">
+                              Prévia:
+                            </span>
+                            <strong className="font-mono text-xs font-extrabold text-zinc-950 tabular-nums">
+                              {previewMeta.label}
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* IMAGE REGISTRATION SECTION: URL LINK OR FILE UPLOAD (JPG, PNG, WEBP) */}
                   <div className="p-4 rounded-2xl bg-[#FAFAFA] border border-zinc-200/90 space-y-3">
@@ -2762,36 +3153,121 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </form>
               )}
 
-              {/* Search & Category Filter Bar inside Admin Products */}
-              <div className="bg-white p-4 rounded-2xl border border-zinc-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="search"
-                    value={adminProductSearch}
-                    onChange={(e) => setAdminProductSearch(e.target.value)}
-                    placeholder="Filtrar produto no estoque por nome ou SKU (ex: Quimi 90, QMP-103)..."
-                    className="w-full pl-9 pr-4 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
-                  />
+              {/* Search, Category, Price Visibility Filter & Batch Selection Toolbar */}
+              <div className="bg-white p-4 rounded-2xl border border-zinc-200 space-y-3">
+                <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="search"
+                      value={adminProductSearch}
+                      onChange={(e) => setAdminProductSearch(e.target.value)}
+                      placeholder="Filtrar produto no estoque por nome ou SKU (ex: Quimi 90, QMP-103)..."
+                      className="w-full pl-9 pr-4 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label="Filtrar por categoria"
+                      value={adminCategoryFilter}
+                      onChange={(e) => setAdminCategoryFilter(e.target.value)}
+                      className="px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-800"
+                    >
+                      <option value="all">Todas as Categorias ({products.length})</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      aria-label="Filtrar por visibilidade de preço"
+                      value={adminPriceFilter}
+                      onChange={(e) =>
+                        setAdminPriceFilter(e.target.value as 'all' | 'visible' | 'hidden')
+                      }
+                      className="px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-800"
+                    >
+                      <option value="all">Exibição: Todos ({products.length})</option>
+                      <option value="visible">Com Valor Visível ({visiblePriceCount})</option>
+                      <option value="hidden">
+                        Sem Valor / Sob Consulta ({products.length - visiblePriceCount})
+                      </option>
+                    </select>
+                  </div>
                 </div>
-                <select
-                  value={adminCategoryFilter}
-                  onChange={(e) => setAdminCategoryFilter(e.target.value)}
-                  className="px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-800"
+
+                {/* Multi-select Batch Action Bar */}
+                <div
+                  className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs transition-colors ${
+                    selectedProductIds.length > 0
+                      ? 'bg-[#FFFBEB] border-[#FFBE00]'
+                      : 'bg-[#FAFAFA] border-zinc-200'
+                  }`}
                 >
-                  <option value="all">Todas as Categorias ({products.length})</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={handleToggleSelectAllFiltered}
+                      className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-300 text-xs font-bold text-zinc-800 cursor-pointer"
+                    >
+                      {allFilteredSelected
+                        ? `Desmarcar Lista (${filteredAdminProducts.length})`
+                        : `Selecionar Filtrados (${filteredAdminProducts.length})`}
+                    </button>
+                    <span className="text-zinc-600 font-medium">
+                      {selectedProductIds.length > 0 ? (
+                        <strong className="text-zinc-950">
+                          {selectedProductIds.length} produto(s) selecionado(s)
+                        </strong>
+                      ) : (
+                        'Marque os produtos desejados na lista abaixo para mostrar ou ocultar valores só neles.'
+                      )}
+                    </span>
+                  </div>
+
+                  {selectedProductIds.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleBatchSetProductPrices(true)}
+                        className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] font-extrabold text-xs cursor-pointer"
+                      >
+                        Mostrar Valor nos Selecionados
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleBatchSetProductPrices(false)}
+                        className="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-[#E3262E] font-extrabold text-xs cursor-pointer"
+                      >
+                        Ocultar Valor nos Selecionados
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProductIds([])}
+                        className="px-2.5 py-1.5 rounded-lg text-zinc-600 hover:text-zinc-900 font-bold text-xs cursor-pointer"
+                      >
+                        Limpar
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="bg-white rounded-2xl border border-zinc-200 overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-200 bg-[#FAFAFA] text-[11px] font-mono uppercase text-zinc-500">
+                      <th className="py-3 pl-4 pr-2 w-10">
+                        <input
+                          type="checkbox"
+                          aria-label="Selecionar todos os produtos listados"
+                          checked={allFilteredSelected}
+                          onChange={handleToggleSelectAllFiltered}
+                          className="w-4 h-4 accent-[#E3262E] rounded cursor-pointer"
+                        />
+                      </th>
                       <th className="py-3 px-4">Foto · SKU · Produto</th>
                       <th className="py-3 px-4">Categoria</th>
                       <th className="py-3 px-4">Emb.</th>
@@ -2805,9 +3281,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <tbody className="divide-y divide-zinc-100 text-xs">
                     {filteredAdminProducts.map((prod) => {
                       const cat = categories.find((c) => c.id === prod.categoryId);
-                      const isPriceShown = prod.showPrice !== false && !settings.hideAllPrices;
+                      const isPriceShown = isProductPriceVisible(prod, settings);
+                      const isSelected = selectedProductIds.includes(prod.id);
                       return (
-                        <tr key={prod.id} className="hover:bg-zinc-50/80">
+                        <tr
+                          key={prod.id}
+                          className={
+                            isSelected ? 'bg-[#FFFBEB]/60 hover:bg-[#FFFBEB]' : 'hover:bg-zinc-50/80'
+                          }
+                        >
+                          <td className="py-3 pl-4 pr-2">
+                            <input
+                              type="checkbox"
+                              aria-label={`Selecionar ${prod.title}`}
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectProduct(prod.id)}
+                              className="w-4 h-4 accent-[#E3262E] rounded cursor-pointer"
+                            />
+                          </td>
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-100 border border-zinc-200 shrink-0">
@@ -2841,6 +3332,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 {formatCurrency(prod.price)}
                               </strong>
                             )}
+                            <span className="block text-[10px] text-zinc-500 mt-0.5">
+                              {getProductInstallmentMeta(prod, settings).label}
+                            </span>
                           </td>
                           <td className="py-3 px-4">
                             <button
@@ -2862,6 +3356,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <button
                               type="button"
                               onClick={() => handleToggleProductPriceVisibility(prod)}
+                              aria-label={`${isPriceShown ? 'Ocultar' : 'Mostrar'} valor de ${prod.title}`}
                               className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
                                 isPriceShown
                                   ? 'bg-[#FFFBEB] text-zinc-950 border-[#FFBE00]'
@@ -3467,18 +3962,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-4 border-t border-zinc-100 bg-[#FAFAFA] flex items-center justify-between gap-2">
+                      <div className="p-4 border-t border-zinc-100 bg-[#FAFAFA] flex flex-wrap items-center justify-between gap-2">
                         <div>
                           {regularSum > kit.promoPrice && (
                             <span className="block text-[10px] text-zinc-400 line-through font-mono">
                               Avulso: {formatCurrency(regularSum)}
                             </span>
                           )}
-                          <strong className="font-mono text-base font-extrabold text-zinc-950">
-                            {kit.showPrice === false
-                              ? 'Sob Consulta'
-                              : formatCurrency(kit.promoPrice)}
-                          </strong>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleKitPriceVisibility(kit)}
+                            className={`mt-0.5 px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer ${
+                              !settings.hideAllPrices && kit.showPrice !== false
+                                ? 'bg-[#FFFBEB] border-[#FFBE00] text-zinc-950'
+                                : 'bg-rose-50 border-rose-200 text-[#E3262E]'
+                            }`}
+                          >
+                            {!settings.hideAllPrices && kit.showPrice !== false
+                              ? `Visível: ${formatCurrency(kit.promoPrice)}`
+                              : 'Valor Oculto (Sob Consulta)'}
+                          </button>
                         </div>
 
                         <div className="flex items-center gap-1.5">
@@ -3597,7 +4100,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               Preto & Ouro Imbatível (Alto Contraste)
                             </option>
                             <option value="crimson_wine">
-                              Vinho & Dourado Express (Institucional & Produtos)
+                              Vinho &amp; Dourado Express (Institucional &amp; Produtos)
+                            </option>
+                            <option value="logistics_fleet">
+                              Logística Limper MT (Moto Limper, Caminhão &amp; MT)
                             </option>
                           </select>
                         </div>
@@ -4514,13 +5020,239 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  className="px-6 py-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer"
-                >
-                  Salvar Configurações da Loja
-                </button>
-              </form>
+                {/* LOGÍSTICA LIMPER MT: MOTO LIMPER, CAMINHÃO & INTERIOR DE MT */}
+                {(() => {
+                  const currentLog = getLogisticsSettings(formSettings);
+                  return (
+                    <div className="p-4 rounded-2xl bg-zinc-50 border border-zinc-200 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="text-[11px] font-mono uppercase font-extrabold text-[#E3262E] flex items-center gap-1.5">
+                            <Truck className="w-3.5 h-3.5" />
+                            <span>REGRAS DE LOGÍSTICA LIMPER MT (BANNER, SITE &amp; CARRINHO)</span>
+                          </span>
+                          <p className="text-xs text-zinc-600 mt-0.5">
+                            Defina os pedidos mínimos da Moto Limper e Entrega de Caminhão para Várzea Grande e Cuiabá. Ao salvar, o banner rotativo, o site e o checkout atualizam automaticamente.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="p-3 rounded-xl bg-white border border-amber-200 space-y-2">
+                          <div className="flex items-center gap-1.5 text-xs font-extrabold text-zinc-900">
+                            <Bike className="w-4 h-4 text-[#D97706]" />
+                            <span>Moto Limper (Pequenos itens)</span>
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="admin-moto-vg-min"
+                              className="block text-[11px] font-bold text-zinc-700 mb-1"
+                            >
+                              Mínimo Várzea Grande - MT (R$)
+                            </label>
+                            <input
+                              id="admin-moto-vg-min"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={formSettings.motoLimperVgMin ?? currentLog.motoVgMin}
+                              onChange={(e) =>
+                                setFormSettings({
+                                  ...formSettings,
+                                  motoLimperVgMin: Math.max(0, Number(e.target.value) || 0),
+                                })
+                              }
+                              className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="admin-moto-cba-min"
+                              className="block text-[11px] font-bold text-zinc-700 mb-1"
+                            >
+                              Mínimo Cuiabá - MT (R$)
+                            </label>
+                            <input
+                              id="admin-moto-cba-min"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={formSettings.motoLimperCbaMin ?? currentLog.motoCbaMin}
+                              onChange={(e) =>
+                                setFormSettings({
+                                  ...formSettings,
+                                  motoLimperCbaMin: Math.max(0, Number(e.target.value) || 0),
+                                })
+                              }
+                              className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-bold"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-white border border-zinc-200 space-y-2">
+                          <div className="flex items-center gap-1.5 text-xs font-extrabold text-zinc-900">
+                            <Truck className="w-4 h-4 text-[#E3262E]" />
+                            <span>Entrega de Caminhão (Galões / Lotes)</span>
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="admin-truck-vg-min"
+                              className="block text-[11px] font-bold text-zinc-700 mb-1"
+                            >
+                              Mínimo Várzea Grande - MT (R$)
+                            </label>
+                            <input
+                              id="admin-truck-vg-min"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={formSettings.truckVgMin ?? currentLog.truckVgMin}
+                              onChange={(e) =>
+                                setFormSettings({
+                                  ...formSettings,
+                                  truckVgMin: Math.max(0, Number(e.target.value) || 0),
+                                })
+                              }
+                              className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="admin-truck-cba-min"
+                              className="block text-[11px] font-bold text-zinc-700 mb-1"
+                            >
+                              Mínimo Cuiabá - MT (R$)
+                            </label>
+                            <input
+                              id="admin-truck-cba-min"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={formSettings.truckCbaMin ?? currentLog.truckCbaMin}
+                              onChange={(e) =>
+                                setFormSettings({
+                                  ...formSettings,
+                                  truckCbaMin: Math.max(0, Number(e.target.value) || 0),
+                                })
+                              }
+                              className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-bold"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="admin-interior-mt-note"
+                          className="block text-[11px] font-bold text-zinc-700 mb-1"
+                        >
+                          Orientação para Restante do Estado de Mato Grosso (Consulta WhatsApp)
+                        </label>
+                        <input
+                          id="admin-interior-mt-note"
+                          type="text"
+                          value={formSettings.interiorMtNote ?? currentLog.interiorMtNote}
+                          onChange={(e) =>
+                            setFormSettings({
+                              ...formSettings,
+                              interiorMtNote: e.target.value,
+                            })
+                          }
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs"
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                  {/* MODO DE CATÁLOGO (CONTROLE GLOBAL + SELETIVO) & PARCELAMENTO PADRÃO */}
+                  <div className="p-4 rounded-2xl bg-[#FFFBEB] border border-[#FDE68A] space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <span className="text-[11px] font-mono uppercase font-extrabold text-[#B45309] block">
+                          CONTROLE DO CATÁLOGO &amp; PARCELAMENTO PADRÃO
+                        </span>
+                        <p className="text-xs text-zinc-600 mt-0.5">
+                          Você pode ocultar ou mostrar valores de todos os produtos aqui ou escolher itens específicos na aba &ldquo;Produtos &amp; Fotos&rdquo;.
+                        </p>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-white border border-zinc-200 font-mono text-[11px] font-bold text-zinc-800">
+                        {visiblePriceCount}/{products.length} produtos c/ valor
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleHideAllProductPrices}
+                        className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-[#E3262E] text-xs font-extrabold cursor-pointer"
+                      >
+                        Ocultar Valores de Todos os Produtos
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleShowAllProductPrices}
+                        className="px-3.5 py-2 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] text-xs font-extrabold cursor-pointer"
+                      >
+                        Exibir Valores em Todos os Produtos
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Parcelamento Padrão da Loja
+                        </label>
+                        <select
+                          value={String(formSettings.defaultInstallmentsCount ?? 3)}
+                          onChange={(e) =>
+                            setFormSettings({
+                              ...formSettings,
+                              defaultInstallmentsCount: Number(e.target.value) || 3,
+                            })
+                          }
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => (
+                            <option key={n} value={String(n)}>
+                              {n === 1 ? '1x (À vista)' : `Até ${n}x no cartão`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-700 mb-1">
+                          Condição Padrão de Juros
+                        </label>
+                        <select
+                          value={
+                            (formSettings.defaultInstallmentsNoInterest ?? true)
+                              ? 'no_interest'
+                              : 'with_card'
+                          }
+                          onChange={(e) =>
+                            setFormSettings({
+                              ...formSettings,
+                              defaultInstallmentsNoInterest: e.target.value === 'no_interest',
+                            })
+                          }
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
+                        >
+                          <option value="no_interest">Sem juros (s/ juros)</option>
+                          <option value="with_card">No cartão (c/ taxa)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="px-6 py-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer"
+                  >
+                    Salvar Configurações da Loja
+                  </button>
+                </form>
 
               {/* Neighborhood Fees Table */}
               <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-zinc-200 space-y-4 self-start">
@@ -4599,9 +5331,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="picking-slip-title"
-          className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block"
         >
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-zinc-300 shadow-2xl space-y-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-zinc-300 shadow-2xl space-y-4 my-auto print:shadow-none print:border-0 print:max-w-full print:p-4">
             <div className="flex items-start justify-between border-b border-dashed border-zinc-300 pb-3">
               <div>
                 <p className="text-[11px] font-mono uppercase text-zinc-500">
@@ -4632,35 +5364,97 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   ? 'ENTREGA DELIVERY'
                   : 'RETIRADA NO BALCÃO (AV. COUTO MAGALHÃES, 2820)'}
               </div>
+              {printOrder.deliveryType === 'delivery' && printOrder.logisticsMode && (
+                <div>
+                  LOGÍSTICA:{' '}
+                  {formatLogisticsModeLabel(
+                    printOrder.logisticsMode,
+                    printOrder.address?.interiorCityName
+                  )}
+                </div>
+              )}
               {printOrder.address && (
                 <div>
                   ENDEREÇO: {printOrder.address.street}, {printOrder.address.number} -{' '}
-                  {printOrder.address.neighborhood} ({printOrder.address.city})
+                  {printOrder.address.neighborhood} (
+                  {printOrder.address.city === 'Interior de MT'
+                    ? `${printOrder.address.interiorCityName || 'Interior'} - MT`
+                    : `${printOrder.address.city}/MT`}
+                  )
                 </div>
               )}
               <div>PAGAMENTO: {formatPaymentMethodLabel(printOrder)}</div>
+              {printOrder.notes && printOrder.notes.trim() && (
+                <div>OBS.: {printOrder.notes.trim()}</div>
+              )}
             </div>
 
             <div className="space-y-2 border-b border-dashed border-zinc-300 pb-3">
               <div className="text-xs font-mono font-bold text-zinc-900">
                 CHECKLIST DE ESTOQUE:
               </div>
-              {printOrder.items.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between text-xs font-mono text-zinc-900"
-                >
-                  <span>
-                    [ ] {item.quantity}x {item.title} ({item.volumeLabel})
-                  </span>
-                  <span className="tabular-nums">{formatCurrency(item.subtotal)}</span>
-                </div>
-              ))}
+              {printOrder.items.map((item, idx) => {
+                const kitBreakdown =
+                  item.kitItems && item.kitItems.length > 0
+                    ? item.kitItems
+                    : kits
+                        .find((k) => k.id === item.productId)
+                        ?.items.map((ki) => {
+                          const p = products.find((pr) => pr.id === ki.productId);
+                          return p
+                            ? {
+                                productId: p.id,
+                                sku: p.sku,
+                                title: p.title,
+                                volumeLabel: p.volumeLabel,
+                                quantity: ki.quantity,
+                              }
+                            : null;
+                        })
+                        .filter((x): x is NonNullable<typeof x> => Boolean(x)) || [];
+
+                return (
+                  <div key={idx} className="space-y-1">
+                    <div className="flex items-start justify-between gap-2 text-xs font-mono text-zinc-900">
+                      <span className="font-semibold">
+                        [ ] {item.quantity}x {item.title} ({item.volumeLabel})
+                      </span>
+                      <span className="tabular-nums shrink-0 font-bold">
+                        {isOrderQuoteOnly(printOrder) || item.priceHidden
+                          ? 'Sob consulta'
+                          : formatCurrency(item.subtotal)}
+                      </span>
+                    </div>
+                    {kitBreakdown.length > 0 && (
+                      <div className="pl-4 ml-1 border-l-2 border-dashed border-zinc-300 space-y-0.5 text-[11px] font-mono text-zinc-700">
+                        <div className="text-[10px] uppercase font-bold text-zinc-500">
+                          Itens inclusos no kit (separar):
+                        </div>
+                        {kitBreakdown.map((sub, subIdx) => (
+                          <div key={`${idx}-sub-${subIdx}`} className="leading-snug">
+                            [ ] {sub.quantity * item.quantity}x {sub.title} (
+                            {sub.volumeLabel})
+                            {item.quantity > 1 ? ` · ${sub.quantity}x/kit` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex justify-between font-mono text-sm font-extrabold text-zinc-900">
-              <span>TOTAL A CONFERIR:</span>
-              <span className="tabular-nums">{formatCurrency(printOrder.total)}</span>
+              <span>
+                {isOrderQuoteOnly(printOrder)
+                  ? 'MODO DO PEDIDO:'
+                  : 'TOTAL A CONFERIR:'}
+              </span>
+              <span className="tabular-nums">
+                {isOrderQuoteOnly(printOrder)
+                  ? 'LISTA S/ VALOR (WHATSAPP)'
+                  : formatCurrency(printOrder.total)}
+              </span>
             </div>
 
             <div className="pt-2 flex items-center gap-2 no-print">

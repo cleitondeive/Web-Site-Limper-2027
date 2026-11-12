@@ -21,12 +21,12 @@ import {
 
 const STORAGE_KEYS = {
   CATEGORIES: 'limper_mt_categories_v3',
-  PRODUCTS: 'limper_mt_products_v3',
-  KITS: 'limper_mt_kits_v4',
+  PRODUCTS: 'limper_mt_products_v4',
+  KITS: 'limper_mt_kits_v5',
   COUPONS: 'limper_mt_coupons_v3',
   BANNERS: 'limper_mt_banners_v4',
   ORDERS: 'limper_mt_orders_v5',
-  SETTINGS: 'limper_mt_settings_v3',
+  SETTINGS: 'limper_mt_settings_v5',
   CART: 'limper_mt_cart_v3',
   CUSTOMER: 'limper_mt_customer_v3',
   FAVORITES: 'limper_mt_favorites_v3',
@@ -112,8 +112,10 @@ export const storageService = {
   saveOrders: (orders: Order[]) =>
     saveToStorage(STORAGE_KEYS.ORDERS, orders),
 
-  getSettings: (): StoreSettings =>
-    loadFromStorage<StoreSettings>(STORAGE_KEYS.SETTINGS, INITIAL_STORE_SETTINGS),
+  getSettings: (): StoreSettings => ({
+    ...INITIAL_STORE_SETTINGS,
+    ...loadFromStorage<StoreSettings>(STORAGE_KEYS.SETTINGS, INITIAL_STORE_SETTINGS),
+  }),
   saveSettings: (settings: StoreSettings) =>
     saveToStorage(STORAGE_KEYS.SETTINGS, settings),
 
@@ -142,8 +144,57 @@ export const storageService = {
   saveCoupons: (coupons: PromoCoupon[]) =>
     saveToStorage(STORAGE_KEYS.COUPONS, coupons),
 
-  getBanners: (): PromoBanner[] =>
-    loadFromStorage<PromoBanner[]>(STORAGE_KEYS.BANNERS, INITIAL_BANNERS),
+  getBanners: (): PromoBanner[] => {
+    const loaded = loadFromStorage<PromoBanner[]>(STORAGE_KEYS.BANNERS, INITIAL_BANNERS);
+    if (typeof window !== 'undefined') {
+      const logisticsBanner = INITIAL_BANNERS.find(
+        (b) => b.id === 'banner-hero-logistica'
+      );
+      const seedFlag = 'limper_mt_logistics_banner_seeded_v1';
+      let nextBanners = loaded;
+      let changed = false;
+
+      if (!window.localStorage.getItem(seedFlag)) {
+        window.localStorage.setItem(seedFlag, '1');
+        if (
+          logisticsBanner &&
+          !nextBanners.some(
+            (b) => b.id === 'banner-hero-logistica' || b.theme === 'logistics_fleet'
+          )
+        ) {
+          nextBanners = [
+            nextBanners[0],
+            logisticsBanner,
+            ...nextBanners.slice(1),
+          ]
+            .filter(Boolean)
+            .map((b, idx) => ({ ...b, order: idx + 1 }));
+          changed = true;
+        }
+      }
+
+      if (
+        logisticsBanner &&
+        nextBanners.some(
+          (b) =>
+            b.imageUrl === '/assets/images/logistics_fleet_banner_1794514263590.jpg'
+        )
+      ) {
+        nextBanners = nextBanners.map((b) =>
+          b.imageUrl === '/assets/images/logistics_fleet_banner_1794514263590.jpg'
+            ? { ...b, imageUrl: logisticsBanner.imageUrl }
+            : b
+        );
+        changed = true;
+      }
+
+      if (changed) {
+        saveToStorage(STORAGE_KEYS.BANNERS, nextBanners);
+      }
+      return nextBanners;
+    }
+    return loaded;
+  },
   saveBanners: (banners: PromoBanner[]) =>
     saveToStorage(STORAGE_KEYS.BANNERS, banners),
 };

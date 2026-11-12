@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import {
+  Bike,
   Calculator,
   Check,
   ClipboardList,
   MapPin,
+  MessageCircle,
   Plus,
   Search,
   ShieldCheck,
@@ -17,14 +19,17 @@ import {
 } from 'lucide-react';
 import {
   CustomerProfile,
+  DeliveryCityOption,
   Order,
   Product,
   StoreSettings,
 } from '../types/commerce';
 import {
+  buildLogisticsWhatsAppConsultUrl,
   formatCurrency,
   formatPhone,
   getEffectivePrice,
+  getLogisticsSettings,
   normalizePhone,
 } from '../utils/commerce';
 import { ProductImageWithFallback } from './CategoryIcon';
@@ -109,8 +114,11 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
   const [neighborhood, setNeighborhood] = useState(
     profile.neighborhood || 'Coxipó'
   );
-  const [city, setCity] = useState<'Cuiabá' | 'Várzea Grande'>(
+  const [city, setCity] = useState<DeliveryCityOption>(
     profile.city || 'Cuiabá'
+  );
+  const [interiorCityName, setInteriorCityName] = useState(
+    profile.interiorCityName || ''
   );
   const [reference, setReference] = useState(profile.reference || '');
   const [clubDiscountActive, setClubDiscountActive] = useState(
@@ -138,6 +146,7 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
         number: matchedOrder.address?.number || '120',
         neighborhood: matchedOrder.address?.neighborhood || 'Centro',
         city: matchedOrder.address?.city || 'Cuiabá',
+        interiorCityName: matchedOrder.address?.interiorCityName || '',
         reference: matchedOrder.address?.reference || '',
         isRegistered: true,
         clubDiscountActive: true,
@@ -172,6 +181,7 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
       number: number.trim(),
       neighborhood: neighborhood.trim() || 'Centro',
       city,
+      interiorCityName: city === 'Interior de MT' ? interiorCityName.trim() : '',
       reference: reference.trim(),
       isRegistered: true,
       clubDiscountActive,
@@ -398,15 +408,31 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
                     <select
                       value={city}
                       onChange={(e) =>
-                        setCity(e.target.value as 'Cuiabá' | 'Várzea Grande')
+                        setCity(e.target.value as DeliveryCityOption)
                       }
                       className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
                     >
                       <option value="Cuiabá">Cuiabá - MT</option>
                       <option value="Várzea Grande">Várzea Grande - MT</option>
+                      <option value="Interior de MT">Outras Cidades de MT</option>
                     </select>
                   </div>
                 </div>
+
+                {city === 'Interior de MT' && (
+                  <div className="mb-3">
+                    <label className="block text-xs font-bold text-zinc-700 mb-1">
+                      Qual sua cidade em Mato Grosso?
+                    </label>
+                    <input
+                      type="text"
+                      value={interiorCityName}
+                      onChange={(e) => setInteriorCityName(e.target.value)}
+                      placeholder="Ex: Sinop, Sorriso, Rondonópolis, Lucas do Rio Verde..."
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                    />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-3 gap-3">
                   <div className="col-span-2">
@@ -496,12 +522,16 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
   const [selectedNeighborhood, setSelectedNeighborhood] = useState(
     profile.neighborhood || 'Coxipó'
   );
-  const [selectedCity, setSelectedCity] = useState<'Cuiabá' | 'Várzea Grande'>(
+  const [selectedCity, setSelectedCity] = useState<DeliveryCityOption>(
     profile.city || 'Cuiabá'
+  );
+  const [interiorCityName, setInteriorCityName] = useState(
+    profile.interiorCityName || ''
   );
 
   if (!isOpen) return null;
 
+  const logistics = getLogisticsSettings(settings);
   const matchedFeeObj = settings.neighborhoodFees.find(
     (n) => n.name.toLowerCase() === selectedNeighborhood.toLowerCase()
   );
@@ -512,8 +542,13 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
     onSaveProfile({
       ...profile,
       cep: formatCep(cepInput) || '78080-000',
-      neighborhood: selectedNeighborhood,
+      neighborhood:
+        selectedCity === 'Interior de MT'
+          ? interiorCityName.trim() || 'Interior de MT'
+          : selectedNeighborhood,
       city: selectedCity,
+      interiorCityName:
+        selectedCity === 'Interior de MT' ? interiorCityName.trim() : '',
     });
     onClose();
   };
@@ -567,12 +602,17 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
                 Região / Bairro
               </label>
               <select
-                value={selectedNeighborhood}
+                value={selectedCity === 'Interior de MT' ? '__interior_mt__' : selectedNeighborhood}
                 onChange={(e) => {
                   const val = e.target.value;
-                  setSelectedNeighborhood(val);
-                  const nb = settings.neighborhoodFees.find((n) => n.name === val);
-                  if (nb) setSelectedCity(nb.city);
+                  if (val === '__interior_mt__') {
+                    setSelectedCity('Interior de MT');
+                    setSelectedNeighborhood('Interior de MT');
+                  } else {
+                    setSelectedNeighborhood(val);
+                    const nb = settings.neighborhoodFees.find((n) => n.name === val);
+                    if (nb) setSelectedCity(nb.city);
+                  }
                 }}
                 className="w-full px-3 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
               >
@@ -581,9 +621,25 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
                     {nb.name} ({nb.city})
                   </option>
                 ))}
+                <option value="__interior_mt__">Outras Cidades de Mato Grosso (MT)</option>
               </select>
             </div>
           </div>
+
+          {selectedCity === 'Interior de MT' && (
+            <div>
+              <label className="block text-xs font-bold text-zinc-800 mb-1">
+                Cidade no Interior de Mato Grosso
+              </label>
+              <input
+                type="text"
+                value={interiorCityName}
+                onChange={(e) => setInteriorCityName(e.target.value)}
+                placeholder="Ex: Sinop, Sorriso, Rondonópolis..."
+                className="w-full px-3.5 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs text-zinc-900"
+              />
+            </div>
+          )}
 
           {/* Quick Region Presets */}
           <div className="space-y-1.5">
@@ -612,30 +668,57 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
             </div>
           </div>
 
-          {/* Live Delivery & Pickup Estimate Card */}
+          {/* Live Delivery & Pickup Estimate Card + Moto Limper & Caminhão Rules */}
           <div className="rounded-xl bg-[#FAFAFA] border border-zinc-200 p-3.5 space-y-2.5 text-xs">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Truck className="w-4 h-4 text-[#E3262E]" />
+                <Bike className="w-4 h-4 text-[#D97706] shrink-0" />
                 <span className="font-bold text-zinc-900">
-                  Delivery Rápido ({selectedNeighborhood})
+                  Moto Limper (Pequenos itens)
                 </span>
               </div>
-              <span className="font-mono font-extrabold text-zinc-950">
-                {formatCurrency(currentFee)} (Grátis acima de {formatCurrency(settings.freeShippingThreshold)})
+              <span className="font-mono font-extrabold text-zinc-950 text-right">
+                VG &gt; {formatCurrency(logistics.motoVgMin)} · CBA &gt; {formatCurrency(logistics.motoCbaMin)}
               </span>
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t border-zinc-200/80">
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200/80">
               <div className="flex items-center gap-2">
-                <Store className="w-4 h-4 text-emerald-700" />
+                <Truck className="w-4 h-4 text-[#E3262E] shrink-0" />
+                <span className="font-bold text-zinc-900">
+                  Entrega de Caminhão (Galões/Lote)
+                </span>
+              </div>
+              <span className="font-mono font-extrabold text-zinc-950 text-right">
+                VG &gt; {formatCurrency(logistics.truckVgMin)} · CBA &gt; {formatCurrency(logistics.truckCbaMin)}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200/80">
+              <div className="flex items-center gap-2">
+                <Store className="w-4 h-4 text-emerald-700 shrink-0" />
                 <span className="font-bold text-zinc-900">
                   Retirada na Loja (Em até 15min)
                 </span>
               </div>
               <span className="font-mono font-extrabold text-emerald-700 uppercase">
-                GRÁTIS
+                GRÁTIS ({formatCurrency(currentFee)} p/ entrega local)
               </span>
+            </div>
+
+            <div className="pt-2 border-t border-zinc-200/80 flex items-center justify-between gap-2">
+              <span className="text-[11px] text-zinc-600">
+                Outras cidades de <strong>Mato Grosso</strong>?
+              </span>
+              <a
+                href={buildLogisticsWhatsAppConsultUrl(settings.whatsappNumber, interiorCityName)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#25D366] hover:bg-[#1DA851] text-zinc-950 font-extrabold text-[11px] shrink-0"
+              >
+                <MessageCircle className="w-3.5 h-3.5 fill-zinc-950" />
+                <span>Consultar MT no WhatsApp</span>
+              </a>
             </div>
           </div>
 
@@ -654,6 +737,7 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
 interface QuickOrderListModalProps {
   isOpen: boolean;
   products: Product[];
+  hideAllPrices?: boolean;
   onClose: () => void;
   onAddMultipleToCart: (entries: { product: Product; quantity: number }[]) => void;
 }
@@ -661,6 +745,7 @@ interface QuickOrderListModalProps {
 export const QuickOrderListModal: React.FC<QuickOrderListModalProps> = ({
   isOpen,
   products,
+  hideAllPrices = false,
   onClose,
   onAddMultipleToCart,
 }) => {
@@ -695,8 +780,18 @@ export const QuickOrderListModal: React.FC<QuickOrderListModalProps> = ({
     }));
 
   const selectedTotal = selectedEntries.reduce(
-    (acc, item) => acc + getEffectivePrice(item.product) * item.quantity,
+    (acc, item) =>
+      acc +
+      (!hideAllPrices && item.product.showPrice !== false
+        ? getEffectivePrice(item.product) * item.quantity
+        : 0),
     0
+  );
+  const selectedHasPriced = selectedEntries.some(
+    (item) => !hideAllPrices && item.product.showPrice !== false
+  );
+  const selectedHasUnpriced = selectedEntries.some(
+    (item) => hideAllPrices || item.product.showPrice === false
   );
 
   const handleSetQty = (productId: string, qty: number) => {
@@ -834,7 +929,9 @@ export const QuickOrderListModal: React.FC<QuickOrderListModalProps> = ({
                         <div className="text-[11px] text-zinc-500">
                           Embalagem: <strong className="font-mono">{prod.volumeLabel}</strong> ·{' '}
                           <span className="font-mono font-bold text-zinc-900">
-                            {formatCurrency(price)} un.
+                            {hideAllPrices || prod.showPrice === false
+                              ? 'Sob consulta'
+                              : `${formatCurrency(price)} un.`}
                           </span>
                         </div>
                       </div>
@@ -869,11 +966,21 @@ export const QuickOrderListModal: React.FC<QuickOrderListModalProps> = ({
                 <span className="text-zinc-500">Itens na lista rápida: </span>
                 <strong className="font-mono text-zinc-950">
                   {selectedEntries.reduce((acc, i) => acc + i.quantity, 0)} unidades
-                </strong>{' '}
-                ·{' '}
-                <strong className="font-mono text-base text-[#E3262E]">
-                  {formatCurrency(selectedTotal)}
                 </strong>
+                {selectedHasPriced && (
+                  <>
+                    {' '}
+                    ·{' '}
+                    <strong className="font-mono text-base text-[#E3262E]">
+                      {formatCurrency(selectedTotal)}
+                    </strong>
+                    {selectedHasUnpriced && (
+                      <span className="text-[11px] text-zinc-500 ml-1">
+                        (+ itens sob consulta)
+                      </span>
+                    )}
+                  </>
+                )}
               </div>
               <button
                 type="button"

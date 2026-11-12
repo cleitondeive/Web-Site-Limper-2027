@@ -17,6 +17,7 @@ import {
   getDiscountPercentage,
   getEffectivePrice,
   getPricePerLiterLabel,
+  getProductInstallmentMeta,
   isProductPriceVisible,
 } from '../utils/commerce';
 import { ProductImageWithFallback } from './CategoryIcon';
@@ -59,7 +60,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const discountPct = getDiscountPercentage(product);
   const pricePerLiter = getPricePerLiterLabel(product);
   const isOutOfStock = product.status === 'out_of_stock';
-  const installmentValue = effectivePrice / 3;
+  const installment = getProductInstallmentMeta(product, settings);
   const wholesaleUnitPrice = +(effectivePrice * 0.94).toFixed(2);
   const reviewCount = getDeterministicReviewCount(product.id);
 
@@ -173,7 +174,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         <div className="p-2.5 sm:p-3 pb-1.5 space-y-1.5">
           {/* Single Clean Highlight Tag (Mercado Livre "MAIS VENDIDO" / Todimo "Preço Exclusivo Site") */}
           <div>
-            {discountPct > 0 ? (
+            {priceVisible && discountPct > 0 ? (
               <div className="inline-block max-w-full py-0.5 px-2 rounded bg-[#E5B800] text-zinc-950 text-[9px] sm:text-[10px] font-extrabold truncate">
                 {product.badgeLabel || 'Preço Exclusivo Site | Limper MT'}
               </div>
@@ -210,7 +211,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                 ({reviewCount})
               </span>
             </div>
-            {pricePerLiter && (
+            {priceVisible && pricePerLiter && (
               <span className="font-mono text-[9px] font-bold text-[#B45309] truncate">
                 {pricePerLiter}
               </span>
@@ -250,7 +251,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </div>
 
             <div className="text-[10px] sm:text-[11px] text-zinc-500 leading-tight truncate">
-              ou <strong className="text-zinc-700">3x {formatCurrency(installmentValue)}</strong> s/ juros
+              {installment.count > 1 ? (
+                <>
+                  ou <strong className="text-zinc-700">{installment.label}</strong>
+                </>
+              ) : (
+                <strong className="text-zinc-700">{installment.label}</strong>
+              )}
             </div>
 
             {/* Mercado Livre B2B Wholesale Tier Pill ("R$ XX,XX levando 3 ou mais") */}
@@ -277,15 +284,21 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </div>
           </div>
         ) : (
-          <div className="py-1">
+          <div className="py-1 space-y-0.5">
             <div className="text-[9px] sm:text-[10px] font-mono uppercase tracking-wider text-[#E3262E] font-bold truncate">
               Atacado & Varejo
             </div>
             <div className="text-xs sm:text-sm font-display font-extrabold text-zinc-900">
-              Sob consulta
+              Valor sob consulta
             </div>
-            <div className="text-[10px] text-zinc-400 mt-0.5 truncate">
-              Cotação no WhatsApp
+            <div className="text-[10px] text-zinc-500 truncate">
+              Envie na lista pelo WhatsApp
+            </div>
+            <div className="flex items-center gap-1 text-[10px] font-extrabold text-[#00A650] pt-0.5 truncate">
+              <Zap className="w-3 h-3 fill-[#00A650] shrink-0" />
+              <span className="truncate">
+                {customerCep ? 'Retirada 15min ou Delivery' : 'Retirada ⚡ 15 MIN'}
+              </span>
             </div>
           </div>
         )}
@@ -324,13 +337,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <button
             type="button"
             onClick={() => onAdd(product)}
-            aria-label={`Adicionar ${product.title} ao carrinho`}
+            aria-label={
+              priceVisible
+                ? `Adicionar ${product.title} à cesta`
+                : `Adicionar ${product.title} à lista`
+            }
             className="w-full py-2 px-2 sm:px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-[11px] sm:text-xs rounded-xl flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer shadow-2xs"
           >
             <ShoppingCart className="w-3.5 h-3.5 stroke-[2.2] shrink-0" />
-            <span className="sm:hidden">{priceVisible ? 'Adicionar' : 'Cotar'}</span>
+            <span className="sm:hidden">{priceVisible ? 'Adicionar' : 'Na Lista'}</span>
             <span className="hidden sm:inline">
-              {priceVisible ? 'Adicionar à Cesta' : 'Cotar no Pedido'}
+              {priceVisible ? 'Adicionar à Cesta' : 'Adicionar à Lista'}
             </span>
           </button>
         )}
@@ -364,6 +381,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const effectivePrice = getEffectivePrice(product);
   const discountPct = getDiscountPercentage(product);
   const pricePerLiter = getPricePerLiterLabel(product);
+  const installment = getProductInstallmentMeta(product, settings);
 
   return (
     <div
@@ -422,7 +440,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 <span className="font-bold text-zinc-900">Embalagem Comercial:</span>{' '}
                 <span className="font-mono font-semibold">{product.volumeLabel}</span> ({product.unit})
               </div>
-              {pricePerLiter && (
+              {priceVisible && pricePerLiter && (
                 <div>
                   <span className="font-bold text-zinc-900">Custo por Litro:</span>{' '}
                   <span className="font-mono font-bold text-[#B45309]">{pricePerLiter}</span> (Alta Economia)
@@ -460,11 +478,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       </span>
                     )}
                   </div>
+                  <div className="text-xs text-zinc-600 mt-1">
+                    Parcelamento: <strong className="text-zinc-900">{installment.label}</strong>
+                  </div>
                 </>
               ) : (
                 <div>
                   <div className="text-xs font-mono font-bold text-[#E3262E] uppercase">
-                    Cotação Direta no Pedido
+                    Lista Sem Valor · Cotação Personalizada
                   </div>
                   <div className="text-xl font-display font-extrabold text-zinc-900">
                     Valor sob consulta no WhatsApp
@@ -504,7 +525,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   className="py-3 px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                 >
                   <ShoppingCart className="w-4 h-4" />
-                  <span>{priceVisible ? 'Adicionar 1 un.' : 'Incluir no Pedido'}</span>
+                  <span>{priceVisible ? 'Adicionar 1 un.' : 'Incluir na Lista'}</span>
                 </button>
                 <button
                   type="button"

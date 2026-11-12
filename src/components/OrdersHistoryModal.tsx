@@ -34,10 +34,12 @@ import {
   buildWhatsAppOrderUrl,
   filterOrdersByCriteria,
   formatCurrency,
+  formatLogisticsModeLabel,
   formatPaymentMethodLabel,
   formatPhone,
   getAdjacentOrderStatus,
   getOrderStageMeta,
+  isOrderQuoteOnly,
   normalizePhone,
   summarizeOrdersPeriod,
   toDateKeyYmd,
@@ -869,8 +871,21 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
                             <>
                               <strong>Endereço de Entrega:</strong>{' '}
                               {activeTrackedOrder.address
-                                ? `${activeTrackedOrder.address.street}, ${activeTrackedOrder.address.number} - ${activeTrackedOrder.address.neighborhood}, ${activeTrackedOrder.address.city}`
+                                ? `${activeTrackedOrder.address.street}, ${activeTrackedOrder.address.number} - ${activeTrackedOrder.address.neighborhood}, ${
+                                    activeTrackedOrder.address.city === 'Interior de MT'
+                                      ? `${activeTrackedOrder.address.interiorCityName || 'Interior'} - MT`
+                                      : `${activeTrackedOrder.address.city} - MT`
+                                  }`
                                 : 'Centro Norte, Várzea Grande - MT'}
+                              {activeTrackedOrder.logisticsMode && (
+                                <span className="block font-bold text-[#E3262E] mt-0.5">
+                                  Logística:{' '}
+                                  {formatLogisticsModeLabel(
+                                    activeTrackedOrder.logisticsMode,
+                                    activeTrackedOrder.address?.interiorCityName
+                                  )}
+                                </span>
+                              )}
                             </>
                           )}
                         </div>
@@ -909,7 +924,9 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
                       Total do Pedido ({activeTrackedOrder.items.reduce((a, i) => a + i.quantity, 0)} itens)
                     </div>
                     <div className="font-mono text-lg font-extrabold text-zinc-950 tabular-nums">
-                      {formatCurrency(activeTrackedOrder.total)}
+                      {isOrderQuoteOnly(activeTrackedOrder)
+                        ? 'Orçamento s/ Valor'
+                        : formatCurrency(activeTrackedOrder.total)}
                     </div>
                   </div>
 
@@ -1330,17 +1347,40 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
                       {order.items.map((item, idx) => (
                         <div
                           key={`${order.id}-${item.productId}-${idx}`}
-                          className="flex items-center justify-between text-xs text-zinc-900"
+                          className="space-y-1"
                         >
-                          <span className="truncate pr-3">
-                            <strong className="font-mono">{item.quantity}x</strong> {item.title}{' '}
-                            <span className="font-mono text-zinc-500">({item.volumeLabel})</span>
-                          </span>
-                          <span className="font-mono font-bold shrink-0 tabular-nums">
-                            {item.priceHidden
-                              ? 'Sob consulta'
-                              : formatCurrency(item.subtotal)}
-                          </span>
+                          <div className="flex items-center justify-between text-xs text-zinc-900">
+                            <span className="truncate pr-3 font-medium">
+                              <strong className="font-mono">{item.quantity}x</strong> {item.title}{' '}
+                              <span className="font-mono text-zinc-500">({item.volumeLabel})</span>
+                            </span>
+                            <span className="font-mono font-bold shrink-0 tabular-nums">
+                              {item.priceHidden
+                                ? 'Sob consulta'
+                                : formatCurrency(item.subtotal)}
+                            </span>
+                          </div>
+                          {item.kitItems && item.kitItems.length > 0 && (
+                            <div className="pl-3 ml-1 border-l-2 border-amber-300 space-y-0.5 text-[11px] text-zinc-600">
+                              <span className="block text-[9px] font-mono uppercase font-bold text-[#B45309]">
+                                Itens inclusos no kit:
+                              </span>
+                              {item.kitItems.map((sub, subIdx) => (
+                                <div
+                                  key={`${order.id}-${idx}-sub-${subIdx}`}
+                                  className="flex items-center justify-between gap-2"
+                                >
+                                  <span className="truncate">
+                                    • <strong className="font-mono">{sub.quantity * item.quantity}x</strong>{' '}
+                                    {sub.title}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-zinc-500 shrink-0">
+                                    {sub.volumeLabel}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1413,7 +1453,9 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
                   <div className="pt-3 border-t border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <div className="text-lg font-mono font-extrabold text-zinc-900 tabular-nums">
-                        Total: {formatCurrency(order.total)}
+                        {isOrderQuoteOnly(order)
+                          ? 'Lista s/ Valor (Orçamento)'
+                          : `Total: ${formatCurrency(order.total)}`}
                       </div>
                     </div>
 

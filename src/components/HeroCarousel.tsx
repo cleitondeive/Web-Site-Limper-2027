@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Bike,
   Car,
   Check,
   ChevronLeft,
@@ -7,19 +8,24 @@ import {
   FlaskConical,
   Heart,
   Home,
+  MessageCircle,
   PackageCheck,
   Plus,
   ShieldAlert,
   Shirt,
   Sparkles,
+  Store,
   TicketPercent,
+  Truck,
 } from 'lucide-react';
 import { INITIAL_BANNERS, LIMPER_LOGO_URL } from '../data/initialCatalog';
-import { Order, Product, PromoBanner, PromoCoupon } from '../types/commerce';
+import { Order, Product, PromoBanner, PromoCoupon, StoreSettings } from '../types/commerce';
 import {
+  buildLogisticsWhatsAppConsultUrl,
   formatCurrency,
   getDiscountPercentage,
   getEffectivePrice,
+  getLogisticsSettings,
   getOrderStageMeta,
 } from '../utils/commerce';
 import { ProductImageWithFallback } from './CategoryIcon';
@@ -28,6 +34,7 @@ interface HeroCarouselProps {
   banners?: PromoBanner[];
   products?: Product[];
   coupons?: PromoCoupon[];
+  settings?: StoreSettings;
   hideAllPrices?: boolean;
   selectedCategoryId: string | null;
   onlyFavorites: boolean;
@@ -49,6 +56,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
   banners = INITIAL_BANNERS,
   products = [],
   coupons = [],
+  settings,
   hideAllPrices = false,
   selectedCategoryId,
   onlyFavorites,
@@ -64,6 +72,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
   onApplyCoupon,
   latestActiveOrder,
 }) => {
+  const logistics = getLogisticsSettings(settings);
+  const logisticsWhatsAppUrl = buildLogisticsWhatsAppConsultUrl(
+    settings?.whatsappNumber || '556530296824'
+  );
   const [activeSlide, setActiveSlide] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [copiedCouponCode, setCopiedCouponCode] = useState<string | null>(null);
@@ -332,7 +344,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                               volumeLabel={prod.volumeLabel}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                             />
-                            {discountPct > 0 && (
+                            {priceVisible && discountPct > 0 && (
                               <span className="absolute top-0.5 right-0.5 px-1 py-0.2 rounded bg-[#E3262E] text-white font-mono text-[8px] font-black">
                                 -{discountPct}%
                               </span>
@@ -382,9 +394,17 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                         </div>
                       </div>
                       <div className="bg-[#880D3E] text-white py-2 px-1.5 sm:p-3 text-center">
-                        <div className="text-[9px] sm:text-[11px] text-white/80 leading-none">Por</div>
+                        <div className="text-[9px] sm:text-[11px] text-white/80 leading-none">
+                          {hideAllPrices ? 'Orçamento' : 'Por'}
+                        </div>
                         <div className="font-mono text-sm sm:text-xl font-extrabold text-white tabular-nums leading-tight mt-0.5">
-                          R$ 32<sup className="text-[9px] sm:text-xs">,90</sup>
+                          {hideAllPrices ? (
+                            'Sob consulta'
+                          ) : (
+                            <>
+                              R$ 32<sup className="text-[9px] sm:text-xs">,90</sup>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -406,10 +426,16 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                       </div>
                       <div className="bg-[#880D3E] text-white py-2 px-1.5 sm:p-3 text-center">
                         <div className="text-[9px] sm:text-[10px] text-white/85 leading-none truncate">
-                          Cada galão sai:
+                          {hideAllPrices ? 'Lista WhatsApp' : 'Cada galão sai:'}
                         </div>
                         <div className="font-mono text-sm sm:text-xl font-extrabold text-[#FFBE00] tabular-nums leading-tight mt-0.5">
-                          R$ 30<sup className="text-[9px] sm:text-xs">,90</sup>
+                          {hideAllPrices ? (
+                            'Cotar Combo'
+                          ) : (
+                            <>
+                              R$ 30<sup className="text-[9px] sm:text-xs">,90</sup>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -431,10 +457,16 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                       </div>
                       <div className="bg-[#880D3E] text-white py-2 px-1.5 sm:p-3 text-center">
                         <div className="text-[9px] sm:text-[10px] text-white/85 leading-none truncate">
-                          Cada galão sai:
+                          {hideAllPrices ? 'Atacado Direto' : 'Cada galão sai:'}
                         </div>
                         <div className="font-mono text-sm sm:text-xl font-extrabold text-[#FFBE00] tabular-nums leading-tight mt-0.5">
-                          R$ 28<sup className="text-[9px] sm:text-xs">,90</sup>
+                          {hideAllPrices ? (
+                            'Sob consulta'
+                          ) : (
+                            <>
+                              R$ 28<sup className="text-[9px] sm:text-xs">,90</sup>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -444,15 +476,27 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
 
               {/* Right Installment Badge + CTA */}
               <div className="lg:col-span-3 px-3 pb-3 pt-1 sm:p-6 flex flex-row lg:flex-col items-center justify-between lg:justify-center gap-3 text-left lg:text-center">
-                <div className="w-13 h-13 sm:w-20 sm:h-20 rounded-full bg-[#68092F] text-white flex flex-col items-center justify-center shadow-md border-2 border-[#FFBE00] shrink-0">
-                  <span className="text-[8px] sm:text-[10px] uppercase tracking-wider leading-none">
-                    Em até
-                  </span>
-                  <span className="font-mono text-base sm:text-2xl font-black text-[#FFBE00] leading-none">
-                    3x*
-                  </span>
-                  <span className="text-[8px] sm:text-[10px] leading-none">s/ juros</span>
-                </div>
+                {hideAllPrices ? (
+                  <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-full bg-[#68092F] text-white flex flex-col items-center justify-center shadow-md border-2 border-[#FFBE00] shrink-0 px-1 text-center">
+                    <span className="text-[7px] sm:text-[10px] uppercase tracking-wider leading-none">
+                      Lista
+                    </span>
+                    <span className="font-mono text-[9px] sm:text-sm font-black text-[#FFBE00] leading-tight">
+                      WhatsApp
+                    </span>
+                    <span className="text-[7px] sm:text-[9px] leading-none">15 min</span>
+                  </div>
+                ) : (
+                  <div className="w-13 h-13 sm:w-20 sm:h-20 rounded-full bg-[#68092F] text-white flex flex-col items-center justify-center shadow-md border-2 border-[#FFBE00] shrink-0">
+                    <span className="text-[8px] sm:text-[10px] uppercase tracking-wider leading-none">
+                      Em até
+                    </span>
+                    <span className="font-mono text-base sm:text-2xl font-black text-[#FFBE00] leading-none">
+                      3x*
+                    </span>
+                    <span className="text-[8px] sm:text-[10px] leading-none">s/ juros</span>
+                  </div>
+                )}
 
                 <div className="flex-1 lg:flex-initial flex sm:flex-col items-center justify-between gap-2">
                   <p className="text-[11px] sm:text-sm font-extrabold text-[#880D3E] leading-snug">
@@ -692,6 +736,160 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
             </div>
           )}
 
+          {/* THEME 4: logistics_fleet (Automatic Rotating Limper MT Logistics Banner) */}
+          {currentBanner.theme === 'logistics_fleet' && (
+            <div className="bg-[#181A20] text-white grid grid-cols-1 lg:grid-cols-12 sm:min-h-[280px] items-stretch">
+              <div className="lg:col-span-4 p-4 sm:py-7 sm:pr-6 sm:pl-16 flex flex-col justify-center space-y-2 border-b lg:border-b-0 lg:border-r border-zinc-800">
+                <div className="inline-flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono uppercase tracking-wider text-[#FFBE00] font-extrabold">
+                  <Truck className="w-3.5 h-3.5 shrink-0" />
+                  <span>{currentBanner.badge}</span>
+                </div>
+                <h2 className="font-display text-xl sm:text-2xl font-extrabold tracking-tight text-white leading-tight">
+                  {currentBanner.title}
+                </h2>
+                <p className="text-[11px] sm:text-xs text-zinc-300 leading-relaxed">
+                  {currentBanner.subtitle}
+                </p>
+                <div className="flex flex-wrap items-center gap-2 pt-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById('logistica-limper');
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth' });
+                      } else {
+                        onOpenCepModal();
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-[11px] sm:text-xs rounded-xl cursor-pointer transition-colors"
+                  >
+                    {currentBanner.ctaText || 'Ver Regras de Entrega'}
+                  </button>
+                  <a
+                    href={logisticsWhatsAppUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 bg-[#25D366] hover:bg-[#1DA851] text-zinc-950 font-extrabold text-[11px] sm:text-xs rounded-xl inline-flex items-center gap-1.5"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 fill-zinc-950" />
+                    <span>Suporte Interior MT</span>
+                  </a>
+                </div>
+              </div>
+
+              <div className="lg:col-span-5 bg-[#FFFBEB] text-zinc-950 p-3.5 sm:p-4 flex flex-col justify-center gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="bg-white rounded-xl p-2.5 border border-[#FDE68A] shadow-2xs space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-[#FFFBEB] border border-[#FFBE00] text-[#E3262E] flex items-center justify-center shrink-0">
+                        <Bike className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-display text-xs font-extrabold text-zinc-950 leading-tight">
+                          Moto Limper
+                        </div>
+                        <div className="text-[10px] text-zinc-500 leading-tight">
+                          Pequenos itens na moto
+                        </div>
+                      </div>
+                    </div>
+                    <div className="pt-1 border-t border-zinc-100 space-y-0.5 text-[11px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-zinc-600 font-semibold whitespace-nowrap">Várzea Grande:</span>
+                        <strong className="font-mono font-extrabold text-[#E3262E] tabular-nums whitespace-nowrap">
+                          Acima de {formatCurrency(logistics.motoVgMin)}
+                        </strong>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-zinc-600 font-semibold whitespace-nowrap">Cuiabá - MT:</span>
+                        <strong className="font-mono font-extrabold text-[#E3262E] tabular-nums whitespace-nowrap">
+                          Acima de {formatCurrency(logistics.motoCbaMin)}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl p-2.5 border border-[#FDE68A] shadow-2xs space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-rose-50 border border-rose-200 text-[#E3262E] flex items-center justify-center shrink-0">
+                        <Truck className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-display text-xs font-extrabold text-zinc-950 leading-tight">
+                          Caminhão Limper
+                        </div>
+                        <div className="text-[10px] text-zinc-500 leading-tight">
+                          Galões 5L & volumes maiores
+                        </div>
+                      </div>
+                    </div>
+                    <div className="pt-1 border-t border-zinc-100 space-y-0.5 text-[11px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-zinc-600 font-semibold whitespace-nowrap">Várzea Grande:</span>
+                        <strong className="font-mono font-extrabold text-zinc-950 tabular-nums whitespace-nowrap">
+                          Acima de {formatCurrency(logistics.truckVgMin)}
+                        </strong>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-zinc-600 font-semibold whitespace-nowrap">Cuiabá - MT:</span>
+                        <strong className="font-mono font-extrabold text-zinc-950 tabular-nums whitespace-nowrap">
+                          Acima de {formatCurrency(logistics.truckCbaMin)}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl bg-emerald-50 border border-emerald-300 px-3 py-2 flex items-center justify-between gap-2 text-[11px]">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-7 h-7 rounded-lg bg-white border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                      <Store className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="min-w-0">
+                      <strong className="text-emerald-950 font-extrabold block leading-tight">
+                        Retirada no Balcão Grátis · Sem Pedido Mínimo
+                      </strong>
+                      <span className="text-emerald-800 truncate block text-[10px]">
+                        Pronto em 15min na Av. Couto Magalhães, 2820 · Várzea Grande
+                      </span>
+                    </div>
+                  </div>
+                  <span className="px-2 py-1 rounded-lg bg-emerald-700 text-white font-mono font-extrabold text-[10px] shrink-0">
+                    GRÁTIS
+                  </span>
+                </div>
+
+                <div className="rounded-xl bg-white border border-amber-300 px-3 py-2 flex items-center justify-between gap-2 text-[11px]">
+                  <div className="min-w-0">
+                    <strong className="text-zinc-950 font-extrabold block">
+                      Restante do Estado de Mato Grosso (MT)
+                    </strong>
+                    <span className="text-zinc-600 truncate block">
+                      Consulte rotas e disponibilidade com nosso suporte via WhatsApp.
+                    </span>
+                  </div>
+                  <a
+                    href={logisticsWhatsAppUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 rounded-lg bg-[#E3262E] hover:bg-[#C81E25] text-white font-extrabold text-[10px] shrink-0"
+                  >
+                    Consultar
+                  </a>
+                </div>
+              </div>
+
+              <div className="hidden lg:block lg:col-span-3 relative bg-zinc-900 min-h-[240px]">
+                <img
+                  src={currentBanner.imageUrl}
+                  alt={currentBanner.title}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover object-center"
+                />
+              </div>
+            </div>
+          )}
+
           {/* Carousel Pagination Dots */}
           <div className="py-2 sm:py-2.5 bg-white border-t border-zinc-100 flex items-center justify-center gap-2">
             {effectiveBanners.map((b, idx) => (
@@ -711,8 +909,8 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
         </div>
       )}
 
-      {/* 3. Interactive 1-Click Coupon Bar (Displays Active Admin Coupons on the Storefront) */}
-      {activeCoupons.length > 0 && (
+      {/* 3. Interactive 1-Click Coupon Bar (Hidden in Quote/Price-Free Mode) */}
+      {!hideAllPrices && activeCoupons.length > 0 && (
         <div className="bg-white rounded-2xl border border-zinc-200/90 px-3.5 py-2.5 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar shadow-2xs">
           <div className="flex items-center gap-2 shrink-0">
             <div className="w-7 h-7 rounded-lg bg-rose-50 border border-rose-200 text-[#E3262E] flex items-center justify-center">

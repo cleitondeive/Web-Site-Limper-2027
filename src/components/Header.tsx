@@ -42,6 +42,7 @@ interface HeaderProps {
   categories: Category[];
   cartItemCount: number;
   cartSubtotal: number;
+  isCartQuoteOnly?: boolean;
   ordersCount: number;
   customerProfile: CustomerProfile;
   hideAllPrices?: boolean;
@@ -78,6 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
   categories,
   cartItemCount,
   cartSubtotal,
+  isCartQuoteOnly = false,
   ordersCount,
   customerProfile,
   hideAllPrices,
@@ -188,7 +190,11 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="hidden xl:flex items-center gap-2 font-semibold text-zinc-200 shrink-0">
             <Clock className="w-3.5 h-3.5 text-[#FFBE00]" />
-            <span>Retirada Expressa em 15min · Frete grátis acima de R$ 150</span>
+            <span>
+              {hideAllPrices
+                ? 'Retirada Expressa em 15min · Lista de Orçamento via WhatsApp'
+                : 'Retirada Expressa em 15min · Frete grátis acima de R$ 150'}
+            </span>
           </div>
 
           <div className="flex items-center gap-2.5 sm:gap-3.5 text-zinc-300 shrink-0">
@@ -328,10 +334,14 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <div className="text-[11px] sm:text-xs leading-tight">
               <span className="hidden xs:block text-zinc-600 font-medium text-[10px] sm:text-xs">
-                Minha Cesta
+                {hideAllPrices || (cartItemCount > 0 && isCartQuoteOnly)
+                  ? 'Minha Lista'
+                  : 'Minha Cesta'}
               </span>
               <strong className="block font-mono font-extrabold text-zinc-950 tabular-nums">
-                {hideAllPrices ? 'Cotar' : formatCurrency(cartSubtotal)}
+                {hideAllPrices || (cartItemCount > 0 && isCartQuoteOnly)
+                  ? 'Orçamento'
+                  : formatCurrency(cartSubtotal)}
               </strong>
             </div>
           </button>
@@ -651,6 +661,21 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Gift className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
               <span>Kits & Combos</span>
+            </a>
+
+            <a
+              href="#logistica-limper"
+              onClick={(e) => {
+                e.preventDefault();
+                onSelectStore();
+                setTimeout(() => {
+                  document.getElementById('logistica-limper')?.scrollIntoView({ behavior: 'smooth' });
+                }, 50);
+              }}
+              className="inline-flex items-center gap-1.5 hover:text-[#E3262E] transition-colors cursor-pointer text-[11px] sm:text-xs"
+            >
+              <Truck className="w-3.5 h-3.5 text-[#D97706] shrink-0" />
+              <span>Logística VG / CBA / MT</span>
             </a>
           </div>
 

@@ -1,7 +1,9 @@
 import {
   CartItem,
   CatalogSortOption,
+  DeliveryCityOption,
   DeliveryType,
+  LogisticsDeliveryMode,
   Order,
   OrderDatePreset,
   OrderStatus,
@@ -37,6 +39,23 @@ export function isProductPriceVisible(product: Product, settings?: StoreSettings
     return false;
   }
   return product.showPrice !== false;
+}
+
+export function isCatalogAllPricesHidden(
+  products: Product[],
+  settings?: StoreSettings,
+  kits?: PromoKit[]
+): boolean {
+  if (settings?.hideAllPrices) {
+    return true;
+  }
+  const hasVisibleProduct = products.some(
+    (p) => p.status !== 'inactive' && isProductPriceVisible(p, settings)
+  );
+  const hasVisibleKit = (kits || []).some(
+    (k) => k.active && k.showPrice !== false && !settings?.hideAllPrices
+  );
+  return !hasVisibleProduct && !hasVisibleKit;
 }
 
 export function getEffectivePrice(product: Product): number {
@@ -78,6 +97,49 @@ export function getPricePerLiterLabel(product: Product): string | null {
 
 function litersMatchValid(match: RegExpMatchArray | null): match is RegExpMatchArray {
   return Boolean(match && match[1]);
+}
+
+export interface ProductInstallmentMeta {
+  count: number;
+  noInterest: boolean;
+  installmentValue: number;
+  label: string;
+}
+
+export function getProductInstallmentMeta(
+  product: Product,
+  settings?: StoreSettings
+): ProductInstallmentMeta {
+  const rawCount =
+    product.installmentsCount ?? settings?.defaultInstallmentsCount ?? 3;
+  const count = Math.max(1, Math.min(12, Math.round(rawCount || 3)));
+  const noInterest =
+    product.installmentsNoInterest ??
+    settings?.defaultInstallmentsNoInterest ??
+    true;
+  const effectivePrice = getEffectivePrice(product);
+  const installmentValue =
+    count > 0 ? Math.round((effectivePrice / count) * 100) / 100 : effectivePrice;
+
+  const label =
+    count > 1
+      ? `${count}x ${formatCurrency(installmentValue)} ${noInterest ? 's/ juros' : 'no cartão'}`
+      : `À vista ${formatCurrency(effectivePrice)}`;
+
+  return {
+    count,
+    noInterest,
+    installmentValue,
+    label,
+  };
+}
+
+export function isOrderQuoteOnly(order: Order): boolean {
+  if (order.isQuoteOnly) return true;
+  if (order.items.length > 0 && order.items.every((item) => item.priceHidden)) {
+    return true;
+  }
+  return false;
 }
 
 export interface CouponEvaluation {
@@ -303,6 +365,13 @@ export function buildKitCartProduct(
     featured: true,
     badgeLabel: kit.badge,
     dilutionHint: itemsLabel || kit.description,
+    kitItems: breakdown.resolvedEntries.map((entry) => ({
+      productId: entry.product.id,
+      sku: entry.product.sku,
+      title: entry.product.title,
+      volumeLabel: entry.product.volumeLabel,
+      quantity: entry.quantity,
+    })),
   };
 }
 
@@ -338,6 +407,156 @@ export function mergeOrderIntoCart(
   }
 
   return { updatedCart: updated, addedCount };
+}
+
+export interface NormalizedLogisticsSettings {
+  motoVgMin: number;
+  motoCbaMin: number;
+  truckVgMin: number;
+  truckCbaMin: number;
+  interiorMtNote: string;
+}
+
+export function getLogisticsSettings(
+  settings?: Partial<StoreSettings>
+): NormalizedLogisticsSettings {
+  const safeMin = (val: unknown, fallback: number): number => {
+    if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+      return val;
+    }
+    return fallback;
+  };
+
+  return {
+    motoVgMin: safeMin(settings?.motoLimperVgMin, 50),
+    motoCbaMin: safeMin(settings?.motoLimperCbaMin, 100),
+    truckVgMin: safeMin(settings?.truckVgMin, 150),
+    truckCbaMin: safeMin(settings?.truckCbaMin, 200),
+    interiorMtNote:
+      (settings?.interiorMtNote || '').trim() ||
+      'Para as demais cidades de Mato Grosso, consulte rotas e frete direto com nosso suporte via WhatsApp.',
+  };
+}
+
+export function getLogisticsMinimumOrderValue(
+  settings: Partial<StoreSettings> | undefined,
+  vehicle: 'moto_limper' | 'truck',
+  city: DeliveryCityOption
+): number | null {
+  if (city === 'Interior de MT') return null;
+  const log = getLogisticsSettings(settings);
+  if (vehicle === 'moto_limper') {
+    return city === 'Várzea Grande' ? log.motoVgMin : log.motoCbaMin;
+  }
+  return city === 'Várzea Grande' ? log.truckVgMin : log.truckCbaMin;
+}
+
+export interface LogisticsEligibilityResult {
+  mode: LogisticsDeliveryMode;
+  minRequired: number | null;
+  meetsMinimum: boolean;
+  remainingToMinimum: number;
+  requiresWhatsAppConsult: boolean;
+  headline: string;
+  detail: string;
+}
+
+export function evaluateLogisticsEligibility(params: {
+  settings?: Partial<StoreSettings>;
+  subtotal: number;
+  isQuoteOnly: boolean;
+  deliveryType: DeliveryType;
+  city: DeliveryCityOption;
+  vehicle: 'moto_limper' | 'truck';
+}): LogisticsEligibilityResult {
+  const { settings, subtotal, isQuoteOnly, deliveryType, city, vehicle } = params;
+  if (deliveryType === 'pickup') {
+    return {
+      mode: 'pickup',
+      minRequired: 0,
+      meetsMinimum: true,
+      remainingToMinimum: 0,
+      requiresWhatsAppConsult: false,
+      headline: 'Retirada no Balcão Limper MT (Grátis)',
+      detail: 'Sem valor mínimo · Separação expressa em ~15 min na Av. Couto Magalhães, 2820.',
+    };
+  }
+
+  if (city === 'Interior de MT') {
+    const log = getLogisticsSettings(settings);
+    return {
+      mode: 'interior_mt',
+      minRequired: null,
+      meetsMinimum: true,
+      remainingToMinimum: 0,
+      requiresWhatsAppConsult: true,
+      headline: 'Restante de Mato Grosso · Consulta via WhatsApp',
+      detail: log.interiorMtNote,
+    };
+  }
+
+  const minRequired = getLogisticsMinimumOrderValue(settings, vehicle, city) ?? 0;
+  const vehicleName =
+    vehicle === 'moto_limper'
+      ? 'Moto Limper (pequenos itens que cabem na moto)'
+      : 'Entrega de Caminhão Limper';
+
+  if (isQuoteOnly) {
+    return {
+      mode: vehicle,
+      minRequired,
+      meetsMinimum: true,
+      remainingToMinimum: 0,
+      requiresWhatsAppConsult: false,
+      headline: `${vehicleName} · ${city} - MT`,
+      detail: `Pedido mínimo de ${formatCurrency(minRequired)} para ${city} - MT (suporte valida os valores e confirma a rota no WhatsApp).`,
+    };
+  }
+
+  const remaining = Math.max(0, Math.round((minRequired - subtotal) * 100) / 100);
+  const meetsMinimum = remaining <= 0;
+
+  return {
+    mode: vehicle,
+    minRequired,
+    meetsMinimum,
+    remainingToMinimum: remaining,
+    requiresWhatsAppConsult: false,
+    headline: meetsMinimum
+      ? `${vehicleName} liberada para ${city} - MT!`
+      : `Faltam ${formatCurrency(remaining)} para atingir o mínimo (${formatCurrency(minRequired)})`,
+    detail: meetsMinimum
+      ? `Seu pedido de ${formatCurrency(subtotal)} atinge o valor mínimo de ${formatCurrency(minRequired)} para ${city} - MT.`
+      : `Para ${vehicleName} em ${city} - MT, pedidos acima de ${formatCurrency(minRequired)} (ou retire grátis no balcão).`,
+  };
+}
+
+export function formatLogisticsModeLabel(
+  mode?: LogisticsDeliveryMode,
+  interiorCityName?: string
+): string {
+  if (mode === 'moto_limper') {
+    return 'Moto Limper (Pequenos itens que cabem na moto)';
+  }
+  if (mode === 'truck') {
+    return 'Entrega de Caminhão Limper (Volumes / Galões)';
+  }
+  if (mode === 'interior_mt') {
+    return `Interior de MT (${interiorCityName?.trim() || 'Consultar frete via WhatsApp'})`;
+  }
+  return 'Retirada no Balcão (Av. Couto Magalhães, 2820)';
+}
+
+export function buildLogisticsWhatsAppConsultUrl(
+  whatsappNumber: string,
+  cityName?: string
+): string {
+  const cleanPhone = normalizePhone(whatsappNumber) || '556530296824';
+  const cityText = cityName?.trim()
+    ? `para a cidade de ${cityName.trim()} - MT`
+    : 'para outra cidade do estado de Mato Grosso';
+  const msg = `Olá, equipe Limper MT! Gostaria de consultar a rota de entrega e frete (Caminhão / Transportadora) ${cityText}.`;
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
 }
 
 export function calculateDeliveryFee(
@@ -376,16 +595,20 @@ export function calculateCartTotals(
   total: number;
   freeShippingRemaining: number;
   hasHiddenPriceItems: boolean;
+  isQuoteOnly: boolean;
 } {
   let itemCount = 0;
   let subtotal = 0;
   let savings = 0;
   let hasHiddenPriceItems = Boolean(settings.hideAllPrices);
+  let visibleItemsCount = 0;
 
   for (const item of cart) {
     const visible = isProductPriceVisible(item.product, settings);
     if (!visible) {
       hasHiddenPriceItems = true;
+    } else {
+      visibleItemsCount += 1;
     }
     const effective = getEffectivePrice(item.product);
     itemCount += item.quantity;
@@ -399,15 +622,18 @@ export function calculateCartTotals(
 
   subtotal = Math.round(subtotal * 100) / 100;
   savings = Math.round(savings * 100) / 100;
+  const isQuoteOnly = cart.length > 0 && visibleItemsCount === 0;
 
-  const couponEval = evaluateCoupon(couponCode || '', subtotal, customCoupons);
+  const couponEval = isQuoteOnly
+    ? { valid: false, code: '', discountAmount: 0, label: '' }
+    : evaluateCoupon(couponCode || '', subtotal, customCoupons);
   const couponDiscount = couponEval.valid ? couponEval.discountAmount : 0;
 
   const deliveryFee = calculateDeliveryFee(subtotal, deliveryType, neighborhoodName, settings);
   const total = Math.max(0, Math.round((subtotal - couponDiscount + deliveryFee) * 100) / 100);
 
   const freeShippingRemaining =
-    settings.freeShippingThreshold > 0
+    !isQuoteOnly && settings.freeShippingThreshold > 0
       ? Math.max(0, Math.round((settings.freeShippingThreshold - subtotal) * 100) / 100)
       : 0;
 
@@ -422,6 +648,7 @@ export function calculateCartTotals(
     total,
     freeShippingRemaining,
     hasHiddenPriceItems,
+    isQuoteOnly,
   };
 }
 
@@ -511,6 +738,8 @@ export interface CheckoutValidationInput {
   customerName: string;
   customerPhone: string;
   deliveryType: DeliveryType;
+  city?: DeliveryCityOption;
+  interiorCityName?: string;
   street: string;
   number: string;
   neighborhood: string;
@@ -528,6 +757,9 @@ export function validateCheckoutInput(input: CheckoutValidationInput): string | 
     return 'Informe um número de WhatsApp válido com DDD (ex: 65 99999-9999).';
   }
   if (input.deliveryType === 'delivery') {
+    if (input.city === 'Interior de MT' && (!input.interiorCityName || input.interiorCityName.trim().length < 2)) {
+      return 'Informe o nome da sua cidade em Mato Grosso para consulta de entrega via WhatsApp.';
+    }
     if (!input.street.trim() || !input.number.trim() || !input.neighborhood.trim()) {
       return 'Preencha Rua/Av., Número e Bairro para a entrega delivery.';
     }
@@ -542,8 +774,13 @@ export function validateCheckoutInput(input: CheckoutValidationInput): string | 
 }
 
 export function formatPaymentMethodLabel(order: Order): string {
+  if (order.paymentMethod === 'quote') {
+    return 'A combinar após envio do orçamento no WhatsApp';
+  }
   if (order.paymentMethod === 'pix') {
-    return 'PIX (Comprovante em anexo)';
+    return isOrderQuoteOnly(order)
+      ? 'Preferência: PIX (após confirmação do orçamento)'
+      : 'PIX (Comprovante em anexo)';
   }
   if (order.paymentMethod === 'card') {
     const sub = order.cardSubType === 'debit' ? 'Débito' : 'Crédito';
@@ -556,52 +793,112 @@ export function formatPaymentMethodLabel(order: Order): string {
 }
 
 export function buildWhatsAppOrderMessage(order: Order, storeAddress?: string): string {
+  const quoteOnly = isOrderQuoteOnly(order);
+  const hasMixedHiddenItems = !quoteOnly && order.items.some((item) => item.priceHidden);
+  const divider = '----------------------------------------';
+
+  const createdDate = new Date(order.createdAt);
+  const formattedDate = Number.isNaN(createdDate.getTime())
+    ? ''
+    : `${createdDate.toLocaleDateString('pt-BR')} ${createdDate.toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`;
+  const totalUnits = order.items.reduce((acc, i) => acc + i.quantity, 0);
+
   const lines: string[] = [
-    '🧼 *NOVO PEDIDO - LIMPER MT* 🧼',
-    `*Pedido:* ${order.id}`,
-    `*Cliente:* ${order.customerName}`,
-    `*Telefone:* ${formatPhone(order.customerPhone)}`,
-    '',
-    '📋 *ITENS PARA SEPARAÇÃO:*',
+    '*COMANDA DE SEPARAÇÃO · LIMPER MT*',
+    `*Pedido ${order.id}*${formattedDate ? ` · ${formattedDate}` : ''}`,
+    divider,
+    `CLIENTE: ${order.customerName}`,
+    `WHATSAPP: ${formatPhone(order.customerPhone)}`,
+    `TIPO: ${
+      order.deliveryType === 'delivery'
+        ? 'ENTREGA DELIVERY'
+        : 'RETIRADA NO BALCÃO (AV. COUTO MAGALHÃES, 2820)'
+    }`,
   ];
 
-  for (const item of order.items) {
-    const priceSuffix = item.priceHidden ? 'Valor sob consulta' : formatCurrency(item.subtotal);
+  if (order.deliveryType === 'delivery' && order.logisticsMode) {
     lines.push(
-      `• ${item.quantity}x ${item.title} ${item.volumeLabel} - ${priceSuffix}`
+      `LOGÍSTICA: ${formatLogisticsModeLabel(order.logisticsMode, order.address?.interiorCityName)}`
     );
   }
-
-  lines.push('');
-  lines.push(`💰 *Subtotal:* ${formatCurrency(order.subtotal)}`);
-  if (order.couponCode && order.discountAmount && order.discountAmount > 0) {
-    lines.push(`🎟️ *Cupom (${order.couponCode}):* -${formatCurrency(order.discountAmount)}`);
-  }
-  if (order.deliveryType === 'delivery') {
-    lines.push(
-      `🚚 *Taxa de Entrega:* ${order.deliveryFee === 0 ? 'Grátis' : formatCurrency(order.deliveryFee)}`
-    );
-  }
-  lines.push(`💵 *Total do Pedido:* ${formatCurrency(order.total)}`);
-  lines.push(
-    `📍 *Tipo:* ${order.deliveryType === 'delivery' ? 'Entrega Delivery' : 'Retirada Expressa no Balcão (Limper MT)'}`
-  );
 
   if (order.deliveryType === 'delivery' && order.address) {
     const refPart = order.address.reference ? ` (${order.address.reference})` : '';
+    const cityDisplay =
+      order.address.city === 'Interior de MT'
+        ? `${order.address.interiorCityName || 'Interior'} - MT`
+        : `${order.address.city}/MT`;
     lines.push(
-      `🏠 *Endereço:* ${order.address.street}, ${order.address.number} - Bairro ${order.address.neighborhood}, ${order.address.city}/MT${refPart}`
+      `ENDEREÇO: ${order.address.street}, ${order.address.number} - ${order.address.neighborhood} (${cityDisplay})${refPart}`
     );
   } else if (storeAddress) {
-    lines.push(`🏪 *Local de Retirada:* ${storeAddress}`);
+    lines.push(`LOCAL RETIRADA: ${storeAddress}`);
   }
 
-  lines.push(`💳 *Forma de Pagamento:* ${formatPaymentMethodLabel(order)}`);
-  if (order.notes && order.notes.trim()) {
-    lines.push(`📝 *Observações:* ${order.notes.trim()}`);
+  lines.push(`PAGAMENTO: ${formatPaymentMethodLabel(order)}`);
+  if (order.pickupCode) {
+    lines.push(`CÓD. ATENDIMENTO: ${order.pickupCode}`);
   }
-  lines.push('');
-  lines.push('⏱️ _Aguardando confirmação e separação da loja._');
+  if (order.notes && order.notes.trim()) {
+    lines.push(`OBS.: ${order.notes.trim()}`);
+  }
+
+  lines.push(divider);
+  lines.push('*CHECKLIST DE ESTOQUE:*');
+
+  for (const item of order.items) {
+    const skuPart = item.sku ? ` [Ref: ${item.sku}]` : '';
+    const valuePart =
+      quoteOnly || item.priceHidden ? 'Sob consulta' : formatCurrency(item.subtotal);
+    lines.push(
+      `[ ] ${item.quantity}x ${item.title} (${item.volumeLabel})${skuPart} — ${valuePart}`
+    );
+    if (item.kitItems && item.kitItems.length > 0) {
+      lines.push('    Itens inclusos no kit (separar):');
+      for (const kitSub of item.kitItems) {
+        const totalSubQty = kitSub.quantity * item.quantity;
+        const subSku = kitSub.sku ? ` [Ref: ${kitSub.sku}]` : '';
+        const perKitNote = item.quantity > 1 ? ` (${kitSub.quantity}x/kit)` : '';
+        lines.push(
+          `    - [ ] ${totalSubQty}x ${kitSub.title} (${kitSub.volumeLabel})${perKitNote}${subSku}`
+        );
+      }
+    }
+  }
+
+  lines.push(divider);
+
+  if (quoteOnly) {
+    lines.push(`ITENS NA LISTA: ${totalUnits} unid. (${order.items.length} produto(s))`);
+    lines.push('*MODO DO PEDIDO: LISTA S/ VALOR (WHATSAPP)*');
+    if (order.logisticsMode === 'interior_mt') {
+      lines.push('FRETE / ROTA: Consultar suporte Limper MT via WhatsApp (Restante de MT).');
+    }
+    lines.push('STATUS: Aguardando orçamento e confirmação da equipe Limper MT.');
+  } else {
+    lines.push(
+      `${hasMixedHiddenItems ? 'SUBTOTAL (ITENS C/ VALOR)' : 'SUBTOTAL'}: ${formatCurrency(order.subtotal)}`
+    );
+    if (order.couponCode && order.discountAmount && order.discountAmount > 0) {
+      lines.push(`CUPOM (${order.couponCode}): -${formatCurrency(order.discountAmount)}`);
+    }
+    if (order.deliveryType === 'delivery') {
+      if (order.logisticsMode === 'interior_mt') {
+        lines.push('TAXA ENTREGA: A consultar com suporte via WhatsApp (Interior de MT)');
+      } else {
+        lines.push(
+          `TAXA ENTREGA: ${order.deliveryFee === 0 ? 'Grátis' : formatCurrency(order.deliveryFee)}`
+        );
+      }
+    }
+    lines.push(`*TOTAL A CONFERIR: ${formatCurrency(order.total)}*`);
+    if (hasMixedHiddenItems) {
+      lines.push('OBS. VALORES: Contém item(ns) sem valor (Sob consulta com a equipe).');
+    }
+  }
 
   return lines.join('\n');
 }

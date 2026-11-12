@@ -47,6 +47,10 @@
 }
 
 @media print {
+  body {
+    background: #ffffff !important;
+    color: #18181b !important;
+  }
   .no-print {
     display: none !important;
   }

@@ -3,6 +3,7 @@ import {
   ArrowRight,
   ArrowUp,
   ArrowUpDown,
+  Bike,
   ChevronRight,
   Clock,
   ExternalLink,
@@ -43,12 +44,15 @@ import {
 import {
   addToCart,
   buildKitCartProduct,
+  buildLogisticsWhatsAppConsultUrl,
   calculateCartTotals,
   calculateKitPricing,
   filterProducts,
   formatCurrency,
   getEffectivePrice,
+  getLogisticsSettings,
   getOrderStageMeta,
+  isCatalogAllPricesHidden,
   mergeOrderIntoCart,
   transitionOrderStatus,
   updateCartQuantity,
@@ -249,8 +253,11 @@ export default function App() {
   const handleAddKitToCart = (kit: PromoKit) => {
     const kitCartProduct = buildKitCartProduct(kit, products);
     setCart((prev) => addToCart(prev, kitCartProduct, 1));
+    const isHidden = Boolean(settings.hideAllPrices) || kit.showPrice === false;
     showToast(
-      `${kit.title} (${formatCurrency(getEffectivePrice(kitCartProduct))}) adicionado à cesta!`
+      isHidden
+        ? `${kit.title} adicionado à lista de orçamento!`
+        : `${kit.title} (${formatCurrency(getEffectivePrice(kitCartProduct))}) adicionado à cesta!`
     );
     setIsCartOpen(true);
   };
@@ -353,6 +360,8 @@ export default function App() {
     coupons
   );
 
+  const allCatalogPricesHidden = isCatalogAllPricesHidden(products, settings, kits);
+
   const selectedCategoryObj = categories.find((c) => c.id === selectedCategoryId);
   const latestActiveOrder =
     orders.find((o) => o.status !== 'completed') || orders[0];
@@ -378,8 +387,9 @@ export default function App() {
         categories={categories}
         cartItemCount={cartTotals.itemCount}
         cartSubtotal={cartTotals.subtotal}
+        isCartQuoteOnly={cartTotals.isQuoteOnly}
         ordersCount={orders.length}
-        hideAllPrices={settings.hideAllPrices}
+        hideAllPrices={allCatalogPricesHidden}
         customerProfile={customerProfile}
         searchQuery={searchQuery}
         onSearchChange={(q) => {
@@ -459,7 +469,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 pb-24 md:pb-12">
+      <main className={`flex-1 pb-24 md:pb-12 ${confirmedOrder ? 'no-print' : ''}`}>
         {activeView === 'store' && (
           <>
             {/* Section 1: Light Smart Solutions Bar + Auto-Rotating Promotional Banner Carousel */}
@@ -467,7 +477,8 @@ export default function App() {
               banners={banners}
               products={products}
               coupons={coupons}
-              hideAllPrices={settings.hideAllPrices}
+              settings={settings}
+              hideAllPrices={allCatalogPricesHidden}
               selectedCategoryId={selectedCategoryId}
               onlyFavorites={onlyFavorites}
               favoritesCount={favorites.length}
@@ -502,9 +513,17 @@ export default function App() {
               <div className="space-y-1">
                 <ProductShelfCarousel
                   kicker="VITRINE DE OFERTAS · DESLIZE PARA VER MAIS"
-                  badgeText="ATÉ 25% OFF NO PIX"
-                  title="Ofertas Imbatíveis da Semana Limper MT"
-                  subtitle="Preços de fábrica Quimiprol com retirada grátis em 15min ou desconto levando 3 ou mais unidades"
+                  badgeText={allCatalogPricesHidden ? 'LISTA WHATSAPP' : 'ATÉ 25% OFF NO PIX'}
+                  title={
+                    allCatalogPricesHidden
+                      ? 'Destaques da Semana Limper MT'
+                      : 'Ofertas Imbatíveis da Semana Limper MT'
+                  }
+                  subtitle={
+                    allCatalogPricesHidden
+                      ? 'Produtos profissionais Quimiprol sem valor exibido — monte sua lista e envie no WhatsApp'
+                      : 'Preços de fábrica Quimiprol com retirada grátis em 15min ou desconto levando 3 ou mais unidades'
+                  }
                   products={promoShowcaseProducts}
                   categories={categories}
                   settings={settings}
@@ -738,9 +757,13 @@ export default function App() {
                       className="px-2.5 sm:px-3 py-1.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-[11px] sm:text-xs font-extrabold text-zinc-900 focus:border-[#FFBE00] focus:outline-none cursor-pointer"
                     >
                       <option value="featured">Destaques da Loja ★</option>
-                      <option value="price_asc">Menor Preço (R$)</option>
-                      <option value="discount_desc">Maior Desconto (% OFF)</option>
-                      <option value="price_desc">Maior Preço / Galões</option>
+                      {!allCatalogPricesHidden && (
+                        <>
+                          <option value="price_asc">Menor Preço (R$)</option>
+                          <option value="discount_desc">Maior Desconto (% OFF)</option>
+                          <option value="price_desc">Maior Preço / Galões</option>
+                        </>
+                      )}
                       <option value="name_asc">Ordem Alfabética (A–Z)</option>
                     </select>
                   </div>
@@ -999,7 +1022,9 @@ export default function App() {
                             <ShoppingBasket className="w-3.5 h-3.5" />
                             <span>
                               {kitQtyInCart > 0
-                                ? `Na Cesta (${kitQtyInCart}) · +1`
+                                ? `Na Lista (${kitQtyInCart}) · +1`
+                                : isPriceHidden
+                                ? 'Incluir Kit na Lista'
                                 : `Levar Kit (${formatCurrency(finalKitPrice)})`}
                             </span>
                           </button>
@@ -1073,10 +1098,20 @@ export default function App() {
                         Destaques Selecionados
                       </h3>
                     </div>
-                    <div className="w-16 h-16 rounded-full bg-[#BA1826] text-white font-mono font-black text-xs flex flex-col items-center justify-center shrink-0 shadow-md">
-                      <span>ATÉ</span>
-                      <span className="text-base leading-none">25%</span>
-                      <span className="text-[9px] text-[#FFBE00]">OFF</span>
+                    <div className="w-16 h-16 rounded-full bg-[#BA1826] text-white font-mono font-black text-xs flex flex-col items-center justify-center shrink-0 shadow-md text-center">
+                      {allCatalogPricesHidden ? (
+                        <>
+                          <span className="text-[9px] text-[#FFBE00]">LISTA</span>
+                          <span className="text-[11px] leading-tight">WHATS</span>
+                          <span className="text-[9px]">15 MIN</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>ATÉ</span>
+                          <span className="text-base leading-none">25%</span>
+                          <span className="text-[9px] text-[#FFBE00]">OFF</span>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -1247,6 +1282,168 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Dedicated Logistics & Fleet Rules Hub ("Logística Limper MT: Moto Limper, Caminhão & Restante de MT") */}
+              {(() => {
+                const log = getLogisticsSettings(settings);
+                return (
+                  <div
+                    id="logistica-limper"
+                    className="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 shadow-2xs space-y-5"
+                  >
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-3">
+                      <div>
+                        <div className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase text-[#E3262E] font-extrabold">
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>LOGÍSTICA &amp; ENTREGAS LIMPER MT · FROTA PRÓPRIA</span>
+                        </div>
+                        <h2 className="font-display text-xl sm:text-2xl font-extrabold text-zinc-900 mt-0.5">
+                          Moto Limper, Entrega de Caminhão &amp; Todo o Estado de MT
+                        </h2>
+                        <p className="text-xs sm:text-sm text-zinc-600 mt-1 max-w-2xl">
+                          Escolha a modalidade ideal para o porte do seu pedido em Várzea Grande, Cuiabá ou consulte rotas para as demais cidades de Mato Grosso.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsCartOpen(true)}
+                        className="px-4 py-2.5 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] font-extrabold text-xs inline-flex items-center gap-1.5 shrink-0 cursor-pointer self-start md:self-auto"
+                      >
+                        <ShoppingBasket className="w-3.5 h-3.5" />
+                        <span>Selecionar Entrega na Cesta</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Card 1: Moto Limper */}
+                      <div className="rounded-2xl bg-[#FFFBEB] border border-[#FDE68A] p-5 flex flex-col justify-between space-y-4">
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold uppercase">
+                              <Bike className="w-3.5 h-3.5" />
+                              <span>MOTO LIMPER</span>
+                            </span>
+                            <span className="text-[11px] font-bold text-amber-800">
+                              Entrega Ágil
+                            </span>
+                          </div>
+                          <h3 className="font-display text-base font-extrabold text-zinc-950">
+                            Pequenos Itens que Cabem na Moto
+                          </h3>
+                          <p className="text-xs text-zinc-700 leading-relaxed">
+                            Ideal para frascos 500mL, 1L, 2L, aromatizantes e reposições rápidas que cabem no baú da Moto Limper.
+                          </p>
+                        </div>
+
+                        <div className="pt-3 border-t border-amber-200 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-zinc-700">Várzea Grande - MT</span>
+                            <strong className="font-mono font-extrabold text-[#E3262E]">
+                              Acima de {formatCurrency(log.motoVgMin)}
+                            </strong>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-zinc-700">Cuiabá - MT</span>
+                            <strong className="font-mono font-extrabold text-[#E3262E]">
+                              Acima de {formatCurrency(log.motoCbaMin)}
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card 2: Entrega de Caminhão */}
+                      <div className="rounded-2xl bg-[#FAFAFA] border border-zinc-200 p-5 flex flex-col justify-between space-y-4">
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-950 text-[#FFBE00] font-mono text-[10px] font-extrabold uppercase">
+                              <Truck className="w-3.5 h-3.5" />
+                              <span>CAMINHÃO LIMPER</span>
+                            </span>
+                            <span className="text-[11px] font-bold text-zinc-600">
+                              Galões 5L &amp; Lotes
+                            </span>
+                          </div>
+                          <h3 className="font-display text-base font-extrabold text-zinc-950">
+                            Entrega de Caminhão na Grande Cuiabá
+                          </h3>
+                          <p className="text-xs text-zinc-600 leading-relaxed">
+                            Para pedidos maiores, caixas fechadas, galões de 5L e abastecimento de condomínios, clínicas e empresas.
+                          </p>
+                        </div>
+
+                        <div className="pt-3 border-t border-zinc-200 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-zinc-700">Várzea Grande - MT</span>
+                            <strong className="font-mono font-extrabold text-zinc-950">
+                              Acima de {formatCurrency(log.truckVgMin)}
+                            </strong>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-zinc-700">Cuiabá - MT</span>
+                            <strong className="font-mono font-extrabold text-zinc-950">
+                              Acima de {formatCurrency(log.truckCbaMin)}
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card 3: Restante do Estado de Mato Grosso */}
+                      <div className="rounded-2xl bg-emerald-50/70 border border-emerald-200 p-5 flex flex-col justify-between space-y-4">
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-700 text-white font-mono text-[10px] font-extrabold uppercase">
+                              <MapPin className="w-3.5 h-3.5" />
+                              <span>TODO MATO GROSSO</span>
+                            </span>
+                            <span className="text-[11px] font-bold text-emerald-800">
+                              Suporte Direto
+                            </span>
+                          </div>
+                          <h3 className="font-display text-base font-extrabold text-zinc-950">
+                            Restante do Estado de Mato Grosso
+                          </h3>
+                          <p className="text-xs text-zinc-700 leading-relaxed">
+                            {log.interiorMtNote}
+                          </p>
+                        </div>
+
+                        <a
+                          href={buildLogisticsWhatsAppConsultUrl(settings.whatsappNumber)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full py-2.5 px-3 rounded-xl bg-[#25D366] hover:bg-[#1DA851] text-zinc-950 font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors"
+                        >
+                          <MessageCircle className="w-4 h-4 fill-zinc-950" />
+                          <span>Consultar Frete no WhatsApp</span>
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start sm:items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-white border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                          <Store className="w-4 h-4" />
+                        </div>
+                        <div className="text-xs">
+                          <strong className="text-emerald-950 font-extrabold block">
+                            Ou prefere Retirada no Balcão Grátis? (Sem pedido mínimo · Pronto em 15min)
+                          </strong>
+                          <span className="text-emerald-800">
+                            Monte sua lista no site e retire grátis direto na loja: {settings.storeAddress}.
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsCartOpen(true)}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shrink-0 cursor-pointer self-start sm:self-auto"
+                      >
+                        Retirar no Balcão Grátis
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Dedicated Physical Store & 15-Minute Drive/Balcão Pickup Hub (Av. Couto Magalhães, 2820) */}
               <div className="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 shadow-2xs grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
                 <div className="lg:col-span-7 space-y-3">
@@ -1296,7 +1493,7 @@ export default function App() {
                       </h3>
                     </div>
                     <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-mono text-[11px] font-extrabold">
-                      Frete R$ 0,00
+                      {allCatalogPricesHidden ? 'Retirada Grátis' : 'Frete R$ 0,00'}
                     </span>
                   </div>
 
@@ -1305,7 +1502,11 @@ export default function App() {
                       <span className="w-5 h-5 rounded-full bg-[#FFBE00] text-zinc-950 font-mono font-extrabold text-[11px] flex items-center justify-center shrink-0">
                         1
                       </span>
-                      <span>Monte sua cesta no site (use o cupom <strong>LIMPER10</strong>).</span>
+                      <span>
+                        {allCatalogPricesHidden
+                          ? 'Monte sua lista de produtos no site sem valores.'
+                          : <>Monte sua cesta no site (use o cupom <strong>LIMPER10</strong>).</>}
+                      </span>
                     </li>
                     <li className="flex items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-[#FFBE00] text-zinc-950 font-mono font-extrabold text-[11px] flex items-center justify-center shrink-0">
@@ -1459,14 +1660,16 @@ export default function App() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="font-extrabold text-white">
-                    Sua Cesta Limper MT:
+                    {cartTotals.isQuoteOnly ? 'Sua Lista Limper MT:' : 'Sua Cesta Limper MT:'}
                   </span>
                   <strong className="font-mono text-sm font-black text-[#FFBE00] tabular-nums">
-                    {settings.hideAllPrices
-                      ? 'Modo Orçamento'
+                    {cartTotals.isQuoteOnly
+                      ? 'Sem Valor · Orçamento WhatsApp'
+                      : cartTotals.hasHiddenPriceItems
+                      ? `${formatCurrency(cartTotals.subtotal)} + Sob Consulta`
                       : formatCurrency(cartTotals.subtotal)}
                   </strong>
-                  {cartTotals.savings > 0 && !settings.hideAllPrices && (
+                  {cartTotals.savings > 0 && !cartTotals.isQuoteOnly && (
                     <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-bold">
                       Economia: {formatCurrency(cartTotals.savings)}
                     </span>
@@ -1474,7 +1677,11 @@ export default function App() {
                 </div>
                 <div className="text-[11px] text-zinc-300 truncate flex items-center gap-1 mt-0.5">
                   <Truck className="w-3.5 h-3.5 text-[#FFBE00] shrink-0" />
-                  {cartTotals.freeShippingRemaining > 0 ? (
+                  {cartTotals.isQuoteOnly ? (
+                    <span>
+                      Envie sua lista personalizada c/ seu nome e telefone direto no WhatsApp!
+                    </span>
+                  ) : cartTotals.freeShippingRemaining > 0 ? (
                     <span>
                       Faltam{' '}
                       <strong className="text-[#FFBE00] font-mono">
@@ -1497,7 +1704,11 @@ export default function App() {
               className="px-4 py-2.5 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs inline-flex items-center justify-center gap-1.5 shrink-0 cursor-pointer shadow-sm active:scale-95 transition-transform"
             >
               <ShoppingBasket className="w-4 h-4 text-[#E3262E]" />
-              <span>Ver Cesta & Finalizar</span>
+              <span>
+                {cartTotals.isQuoteOnly
+                  ? 'Ver Lista & Enviar WhatsApp'
+                  : 'Ver Cesta & Finalizar'}
+              </span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -1575,7 +1786,7 @@ export default function App() {
           className="flex flex-col items-center justify-center py-1 rounded-xl bg-[#FFBE00] text-zinc-950 text-[10px] font-extrabold cursor-pointer"
         >
           <ShoppingBasket className="w-4 h-4 mb-0.5" />
-          <span>Cesta ({cartTotals.itemCount})</span>
+          <span>{allCatalogPricesHidden || cartTotals.isQuoteOnly ? 'Lista' : 'Cesta'} ({cartTotals.itemCount})</span>
         </button>
       </nav>
 
@@ -1626,6 +1837,7 @@ export default function App() {
       <QuickOrderListModal
         isOpen={isQuickOrderModalOpen}
         products={products}
+        hideAllPrices={allCatalogPricesHidden}
         onClose={() => setIsQuickOrderModalOpen(false)}
         onAddMultipleToCart={handleAddBatchToCart}
       />
@@ -1634,14 +1846,12 @@ export default function App() {
       <CartCheckoutDrawer
         isOpen={isCartOpen}
         cart={cart}
-        catalogProducts={products}
         coupons={coupons}
         initialCouponCode={activeCouponCode}
         settings={settings}
         customerProfile={customerProfile}
         existingOrders={orders}
         onClose={() => setIsCartOpen(false)}
-        onAddToCart={handleAddToCart}
         onUpdateQuantity={handleUpdateCartQty}
         onClearCart={handleClearCart}
         onSaveCustomerProfile={handleSaveCustomerProfile}
