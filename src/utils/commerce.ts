@@ -4,6 +4,7 @@ import {
   AdminUser,
   CartItem,
   CatalogSortOption,
+  Category,
   CustomerAddress,
   CustomerPrivacyPrefs,
   CustomerProfile,
@@ -16,6 +17,7 @@ import {
   OrderStatus,
   PaymentMethod,
   Product,
+  PromoBanner,
   PromoCoupon,
   PromoKit,
   SecurityAuditEvent,
@@ -369,7 +371,9 @@ export function buildKitCartProduct(
 
   return {
     id: kit.id,
-    sku: `KIT-${kit.id.replace(/^kit-/i, '').toUpperCase()}`,
+    sku: kit.sku?.trim()
+      ? kit.sku.trim().toUpperCase()
+      : `KIT-${kit.id.replace(/^kit-/i, '').toUpperCase()}`,
     title: kit.title,
     description: itemsLabel
       ? `Itens inclusos no Kit: ${itemsLabel}`
@@ -3085,6 +3089,637 @@ export function parseImportedSiteBackupJson(
     };
   }
 }
+
+// ============================================================================
+// ORDER NUMBERING, CRUD VALIDATORS & LIVE CATALOG HEALTH DIAGNOSTICS
+// ============================================================================
+
+export function generateNextOrderNumber(
+  orders: Pick<Order, 'id'>[],
+  floorNumber: number = 1043
+): number {
+  let maxNumber = floorNumber;
+  for (const order of orders) {
+    const match = String(order.id || '').match(/(\d+)$/);
+    if (match) {
+      const parsed = Number.parseInt(match[1], 10);
+      if (Number.isFinite(parsed) && parsed > maxNumber) {
+        maxNumber = parsed;
+      }
+    }
+  }
+  return maxNumber + 1;
+}
+
+export interface CrudValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+export function validateProductDraft(
+  draft: {
+    title: string;
+    sku: string;
+    price: number;
+    promoPrice: number | null;
+    categoryId: string;
+    installmentsCount?: number;
+  },
+  existingProducts: Pick<Product, 'id' | 'sku'>[],
+  editingProductId?: string | null
+): CrudValidationResult {
+  if (draft.title.trim().length < 2) {
+    return { valid: false, error: 'Informe o título do produto (mínimo 2 caracteres).' };
+  }
+  if (!draft.categoryId.trim()) {
+    return { valid: false, error: 'Selecione uma categoria válida para o produto.' };
+  }
+  if (!Number.isFinite(draft.price) || draft.price < 0) {
+    return { valid: false, error: 'Informe um preço regular válido (zero ou positivo).' };
+  }
+  if (draft.promoPrice !== null) {
+    if (!Number.isFinite(draft.promoPrice) || draft.promoPrice <= 0) {
+      return {
+        valid: false,
+        error: 'O preço promocional deve ser maior que R$ 0,00 (ou deixe o campo em branco).',
+      };
+    }
+    if (draft.price > 0 && draft.promoPrice >= draft.price) {
+      return {
+        valid: false,
+        error: 'O preço promocional precisa ser menor que o preço regular para gerar desconto.',
+      };
+    }
+  }
+  const normalizedSku = draft.sku.trim().toUpperCase();
+  if (normalizedSku) {
+    const duplicate = existingProducts.find(
+      (p) =>
+        p.id !== editingProductId &&
+        p.sku.trim().toUpperCase() === normalizedSku
+    );
+    if (duplicate) {
+      return {
+        valid: false,
+        error: `Já existe um produto cadastrado com o código SKU "${normalizedSku}". Use um SKU exclusivo.`,
+      };
+    }
+  }
+  if (
+    draft.installmentsCount !== undefined &&
+    (!Number.isFinite(draft.installmentsCount) ||
+      draft.installmentsCount < 1 ||
+      draft.installmentsCount > 12)
+  ) {
+    return { valid: false, error: 'O parcelamento deve ficar entre 1x e 12x.' };
+  }
+  return { valid: true };
+}
+
+export interface GenerateAutoSkuOptions {
+  kind: 'product' | 'kit';
+  existingSkus: string[];
+  currentSku?: string;
+  preferredPrefix?: string;
+  mode?: 'sequential' | 'random';
+  rng?: () => number;
+}
+
+/**
+ * Generates a guaranteed-unique SKU strictly following the 3-letters + hyphen + 3-digits pattern (AAA-000).
+ * Defaults to "QMP-NNN" for products and "KIT-NNN" for kits, preserving a valid custom 3-letter prefix if provided.
+ */
+export function generateAutoSku(options: GenerateAutoSkuOptions): string {
+  const defaultPrefix = options.kind === 'kit' ? 'KIT' : 'QMP';
+  const fallbackPrefixes =
+    options.kind === 'kit'
+      ? ['KIT', 'CMB', 'LMP', 'PRO']
+      : ['QMP', 'LMP', 'PRO', 'CLN'];
+
+  const extractedCustomPrefix = options.preferredPrefix
+    ?.trim()
+    .toUpperCase()
+    .match(/^([A-Z]{3})(?:-|$)/)?.[1];
+
+  const candidatePrefixes = extractedCustomPrefix
+    ? [extractedCustomPrefix, ...fallbackPrefixes.filter((p) => p !== extractedCustomPrefix)]
+    : fallbackPrefixes;
+
+  const blocked = new Set<string>();
+  for (const raw of options.existingSkus) {
+    const clean = raw.trim().toUpperCase();
+    if (clean) blocked.add(clean);
+  }
+  if (options.currentSku?.trim()) {
+    blocked.add(options.currentSku.trim().toUpperCase());
+  }
+
+  const mode = options.mode ?? 'random';
+  const rng = options.rng ?? Math.random;
+
+  for (const prefix of candidatePrefixes) {
+    // Prefer 101..999 (clean 3-digit catalog codes like QMP-102 / KIT-101), then 001..100
+    const availableNumbers: number[] = [];
+    for (let n = 101; n <= 999; n += 1) {
+      const code = `${prefix}-${String(n).padStart(3, '0')}`;
+      if (!blocked.has(code)) availableNumbers.push(n);
+    }
+    if (availableNumbers.length === 0) {
+      for (let n = 1; n <= 100; n += 1) {
+        const code = `${prefix}-${String(n).padStart(3, '0')}`;
+        if (!blocked.has(code)) availableNumbers.push(n);
+      }
+    }
+    if (availableNumbers.length > 0) {
+      if (mode === 'sequential') {
+        return `${prefix}-${String(availableNumbers[0]).padStart(3, '0')}`;
+      }
+      const randVal = Math.min(0.999999, Math.max(0, rng()));
+      const idx = Math.floor(randVal * availableNumbers.length);
+      return `${prefix}-${String(availableNumbers[idx]).padStart(3, '0')}`;
+    }
+  }
+
+  return `${defaultPrefix}-999`;
+}
+
+export function validateKitDraft(
+  draft: {
+    title: string;
+    sku?: string;
+    promoPrice: number;
+    items: { productId: string; quantity: number }[];
+  },
+  catalogProducts: Pick<Product, 'id' | 'sku'>[],
+  existingKits?: Pick<PromoKit, 'id' | 'sku'>[],
+  editingKitId?: string | null
+): CrudValidationResult {
+  if (draft.title.trim().length < 2) {
+    return { valid: false, error: 'Informe o nome do kit promocional (mínimo 2 caracteres).' };
+  }
+  const normalizedSku = draft.sku?.trim().toUpperCase() || '';
+  if (normalizedSku) {
+    const dupProduct = catalogProducts.find(
+      (p) => p.sku && p.sku.trim().toUpperCase() === normalizedSku
+    );
+    if (dupProduct) {
+      return {
+        valid: false,
+        error: `O código SKU "${normalizedSku}" já está em uso em um produto do catálogo. Clique em "Gerar SKU" para criar um código exclusivo.`,
+      };
+    }
+    const dupKit = (existingKits || []).find(
+      (k) =>
+        k.id !== editingKitId &&
+        k.sku &&
+        k.sku.trim().toUpperCase() === normalizedSku
+    );
+    if (dupKit) {
+      return {
+        valid: false,
+        error: `Já existe um kit cadastrado com o código SKU "${normalizedSku}". Clique em "Gerar SKU" para criar um código exclusivo.`,
+      };
+    }
+  }
+  const catalogIds = new Set(catalogProducts.map((p) => p.id));
+  const validItems = draft.items.filter(
+    (it) => it.quantity > 0 && catalogIds.has(it.productId)
+  );
+  if (validItems.length === 0) {
+    return {
+      valid: false,
+      error: 'Selecione pelo menos 1 produto válido do catálogo para compor este kit.',
+    };
+  }
+  if (!Number.isFinite(draft.promoPrice) || draft.promoPrice <= 0) {
+    return {
+      valid: false,
+      error: 'Informe um preço promocional válido maior que R$ 0,00 para o kit.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateCouponDraft(
+  draft: {
+    code: string;
+    discountType: 'percent' | 'fixed';
+    discountValue: number;
+    minOrderValue: number;
+  },
+  existingCoupons: Pick<PromoCoupon, 'id' | 'code'>[],
+  editingCouponId?: string | null
+): CrudValidationResult {
+  const cleanCode = draft.code.trim().toUpperCase().replace(/\s+/g, '');
+  if (cleanCode.length < 3) {
+    return {
+      valid: false,
+      error: 'O código do cupom deve ter pelo menos 3 caracteres (ex: LIMPER15).',
+    };
+  }
+  const duplicate = existingCoupons.find(
+    (c) =>
+      c.id !== editingCouponId &&
+      c.code.trim().toUpperCase() === cleanCode
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `O cupom "${cleanCode}" já existe na loja. Escolha outro código.`,
+    };
+  }
+  if (!Number.isFinite(draft.discountValue) || draft.discountValue <= 0) {
+    return {
+      valid: false,
+      error: 'Informe um valor de desconto maior que zero.',
+    };
+  }
+  if (draft.discountType === 'percent' && draft.discountValue > 100) {
+    return {
+      valid: false,
+      error: 'O desconto em porcentagem não pode ultrapassar 100%.',
+    };
+  }
+  if (!Number.isFinite(draft.minOrderValue) || draft.minOrderValue < 0) {
+    return {
+      valid: false,
+      error: 'O pedido mínimo do cupom não pode ser negativo.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateCategoryDraft(
+  draft: { name: string },
+  existingCategories: Pick<Category, 'id' | 'name'>[],
+  editingCategoryId?: string | null
+): CrudValidationResult {
+  const cleanName = draft.name.trim();
+  if (cleanName.length < 2) {
+    return {
+      valid: false,
+      error: 'Informe o nome completo da categoria (mínimo 2 caracteres).',
+    };
+  }
+  const duplicate = existingCategories.find(
+    (c) =>
+      c.id !== editingCategoryId &&
+      c.name.trim().toLowerCase() === cleanName.toLowerCase()
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `Já existe uma categoria chamada "${duplicate.name}".`,
+    };
+  }
+  return { valid: true };
+}
+
+export function validateBannerDraft(draft: {
+  title: string;
+}): CrudValidationResult {
+  if (draft.title.trim().length < 2) {
+    return {
+      valid: false,
+      error: 'Informe o título principal da campanha para o banner.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateStoreSettingsDraft(
+  settings: StoreSettings
+): CrudValidationResult {
+  const numericChecks: Array<[number | undefined, string]> = [
+    [settings.freeShippingThreshold, 'Valor para frete grátis'],
+    [settings.defaultDeliveryFee, 'Taxa padrão de entrega'],
+    [settings.motoLimperVgMin, 'Mínimo Moto Limper (VG)'],
+    [settings.motoLimperCbaMin, 'Mínimo Moto Limper (Cuiabá)'],
+    [settings.truckVgMin, 'Mínimo Caminhão (VG)'],
+    [settings.truckCbaMin, 'Mínimo Caminhão (Cuiabá)'],
+  ];
+
+  for (const [val, label] of numericChecks) {
+    if (val !== undefined && (!Number.isFinite(val) || val < 0)) {
+      return {
+        valid: false,
+        error: `${label} não pode ser negativo.`,
+      };
+    }
+  }
+  return { valid: true };
+}
+
+export type CatalogHealthSeverity = 'ok' | 'warning' | 'critical';
+
+export interface CatalogHealthCheck {
+  id: string;
+  label: string;
+  severity: CatalogHealthSeverity;
+  detail: string;
+  autoFixable: boolean;
+}
+
+export interface CatalogHealthReport {
+  status: CatalogHealthSeverity;
+  passedCount: number;
+  warningCount: number;
+  criticalCount: number;
+  autoFixableCount: number;
+  checks: CatalogHealthCheck[];
+}
+
+export function auditCatalogHealth(data: {
+  categories: Category[];
+  products: Product[];
+  kits: PromoKit[];
+  coupons: PromoCoupon[];
+  banners: PromoBanner[];
+  adminUsers: AdminUser[];
+  siteBackups: SiteBackupSnapshot[];
+}): CatalogHealthReport {
+  const checks: CatalogHealthCheck[] = [];
+  const categoryIds = new Set(data.categories.map((c) => c.id));
+  const productIds = new Set(data.products.map((p) => p.id));
+
+  // 1. Duplicate SKUs
+  const skuCounts = new Map<string, number>();
+  for (const p of data.products) {
+    const key = p.sku.trim().toUpperCase();
+    if (!key) continue;
+    skuCounts.set(key, (skuCounts.get(key) || 0) + 1);
+  }
+  const dupSkus = Array.from(skuCounts.entries()).filter(([, count]) => count > 1);
+  checks.push({
+    id: 'skus',
+    label: 'Códigos SKU Exclusivos',
+    severity: dupSkus.length > 0 ? 'critical' : 'ok',
+    detail:
+      dupSkus.length > 0
+        ? `${dupSkus.length} código(s) SKU duplicado(s): ${dupSkus
+            .map(([sku]) => sku)
+            .slice(0, 3)
+            .join(', ')}.`
+        : `${data.products.length} produtos com códigos SKU únicos validados.`,
+    autoFixable: dupSkus.length > 0,
+  });
+
+  // 2. Orphaned Product Categories
+  const orphanedProducts = data.products.filter(
+    (p) => !categoryIds.has(p.categoryId)
+  );
+  checks.push({
+    id: 'product_categories',
+    label: 'Vínculo Produto → Categoria',
+    severity: orphanedProducts.length > 0 ? 'critical' : 'ok',
+    detail:
+      orphanedProducts.length > 0
+        ? `${orphanedProducts.length} produto(s) apontam para categoria removida.`
+        : `Todos os ${data.products.length} produtos estão vinculados a ${data.categories.length} categoria(s) ativa(s).`,
+    autoFixable: orphanedProducts.length > 0 && data.categories.length > 0,
+  });
+
+  // 3. Pricing & Promo Consistency
+  const invalidPromoProducts = data.products.filter(
+    (p) =>
+      p.price < 0 ||
+      (p.promoPrice != null && (p.promoPrice <= 0 || (p.price > 0 && p.promoPrice >= p.price)))
+  );
+  checks.push({
+    id: 'pricing_integrity',
+    label: 'Consistência de Preços De / Por',
+    severity: invalidPromoProducts.length > 0 ? 'warning' : 'ok',
+    detail:
+      invalidPromoProducts.length > 0
+        ? `${invalidPromoProducts.length} produto(s) com preço promocional igual ou maior que o regular.`
+        : 'Todos os preços regulares e ofertas promocionais estão coerentes.',
+    autoFixable: invalidPromoProducts.length > 0,
+  });
+
+  // 4. Kits & Banners Product References
+  const brokenKitRefs = data.kits.reduce(
+    (acc, k) =>
+      acc + k.items.filter((it) => !productIds.has(it.productId)).length,
+    0
+  );
+  const brokenBannerRefs = data.banners.reduce(
+    (acc, b) =>
+      acc + b.featuredProductIds.filter((id) => !productIds.has(id)).length,
+    0
+  );
+  const totalGhostRefs = brokenKitRefs + brokenBannerRefs;
+  checks.push({
+    id: 'kits_banners_refs',
+    label: 'Referências de Kits & Banners',
+    severity: totalGhostRefs > 0 ? 'warning' : 'ok',
+    detail:
+      totalGhostRefs > 0
+        ? `${totalGhostRefs} referência(s) a produtos removidos encontrada(s) em kits ou banners.`
+        : `${data.kits.length} kit(s) e ${data.banners.length} banner(s) com referências íntegras.`,
+    autoFixable: totalGhostRefs > 0,
+  });
+
+  // 5. Coupons Integrity
+  const couponCodes = new Map<string, number>();
+  let badCoupons = 0;
+  for (const cp of data.coupons) {
+    const key = cp.code.trim().toUpperCase();
+    couponCodes.set(key, (couponCodes.get(key) || 0) + 1);
+    if (
+      cp.discountValue <= 0 ||
+      (cp.discountType === 'percent' && cp.discountValue > 100)
+    ) {
+      badCoupons += 1;
+    }
+  }
+  const dupCoupons = Array.from(couponCodes.values()).filter((c) => c > 1).length;
+  checks.push({
+    id: 'coupons_integrity',
+    label: 'Regras & Códigos de Cupons',
+    severity: dupCoupons > 0 || badCoupons > 0 ? 'warning' : 'ok',
+    detail:
+      dupCoupons > 0 || badCoupons > 0
+        ? `Encontrado(s) ${dupCoupons} código(s) duplicado(s) e ${badCoupons} regra(s) de desconto fora do limite.`
+        : `${data.coupons.length} cupom(ns) válidos e sem duplicidade.`,
+    autoFixable: dupCoupons > 0 || badCoupons > 0,
+  });
+
+  // 6. Active Master Account & Site Backup Readiness
+  const activeMasters = data.adminUsers.filter(
+    (u) => u.role === 'master' && u.active
+  ).length;
+  checks.push({
+    id: 'master_governance',
+    label: 'Governança de Conta Master',
+    severity: activeMasters === 0 ? 'critical' : 'ok',
+    detail:
+      activeMasters === 0
+        ? 'Nenhuma conta Master ativa encontrada.'
+        : `${activeMasters} conta(s) Master ativa(s) protegendo o painel.`,
+    autoFixable: false,
+  });
+
+  checks.push({
+    id: 'backup_readiness',
+    label: 'Ponto de Backup Salvo',
+    severity: data.siteBackups.length === 0 ? 'warning' : 'ok',
+    detail:
+      data.siteBackups.length === 0
+        ? 'Nenhum ponto de backup criado ainda. Recomendado gerar um backup abaixo.'
+        : `${data.siteBackups.length} backup(s) armazenado(s) · último em ${formatBrDateFromYmd(
+            data.siteBackups[0].dateKey
+          )}.`,
+    autoFixable: false,
+  });
+
+  const passedCount = checks.filter((c) => c.severity === 'ok').length;
+  const warningCount = checks.filter((c) => c.severity === 'warning').length;
+  const criticalCount = checks.filter((c) => c.severity === 'critical').length;
+  const autoFixableCount = checks.filter((c) => c.autoFixable).length;
+  const status: CatalogHealthSeverity =
+    criticalCount > 0 ? 'critical' : warningCount > 0 ? 'warning' : 'ok';
+
+  return {
+    status,
+    passedCount,
+    warningCount,
+    criticalCount,
+    autoFixableCount,
+    checks,
+  };
+}
+
+export function autoRepairCatalogIntegrity(data: {
+  categories: Category[];
+  products: Product[];
+  kits: PromoKit[];
+  coupons: PromoCoupon[];
+  banners: PromoBanner[];
+}): {
+  products: Product[];
+  kits: PromoKit[];
+  coupons: PromoCoupon[];
+  banners: PromoBanner[];
+  fixesApplied: string[];
+} {
+  const fixesApplied: string[] = [];
+  const categoryIds = new Set(data.categories.map((c) => c.id));
+  const fallbackCategoryId = data.categories[0]?.id || 'cat-casa';
+
+  // 1. Repair product categories, duplicate SKUs, and invalid promo prices
+  const seenSkus = new Set<string>();
+  let fixedCats = 0;
+  let fixedSkus = 0;
+  let fixedPromos = 0;
+
+  const nextProducts = data.products.map((p, idx) => {
+    let next = { ...p };
+
+    if (!categoryIds.has(next.categoryId)) {
+      next.categoryId = fallbackCategoryId;
+      fixedCats += 1;
+    }
+
+    const baseSku = next.sku.trim().toUpperCase() || `QMP-${idx + 1}`;
+    let candidateSku = baseSku;
+    if (seenSkus.has(candidateSku)) {
+      let n = 2;
+      while (seenSkus.has(`${baseSku}-${n}`)) n += 1;
+      candidateSku = `${baseSku}-${n}`;
+      next.sku = candidateSku;
+      fixedSkus += 1;
+    }
+    seenSkus.add(candidateSku);
+
+    if (next.price < 0) {
+      next.price = Math.abs(next.price);
+      fixedPromos += 1;
+    }
+    if (
+      next.promoPrice != null &&
+      (next.promoPrice <= 0 || (next.price > 0 && next.promoPrice >= next.price))
+    ) {
+      next.promoPrice = null;
+      fixedPromos += 1;
+    }
+
+    return next;
+  });
+
+  if (fixedCats > 0) {
+    fixesApplied.push(`${fixedCats} produto(s) órfão(s) realocado(s) para categoria válida`);
+  }
+  if (fixedSkus > 0) {
+    fixesApplied.push(`${fixedSkus} código(s) SKU duplicado(s) renomeado(s)`);
+  }
+  if (fixedPromos > 0) {
+    fixesApplied.push(`${fixedPromos} preço(s) promocional(is) inconsistente(s) corrigido(s)`);
+  }
+
+  const validProductIds = new Set(nextProducts.map((p) => p.id));
+
+  // 2. Clean deleted product references from kits and banners
+  let cleanedKitItems = 0;
+  const nextKits = data.kits.map((k) => {
+    const cleanItems = k.items.filter((it) => validProductIds.has(it.productId));
+    cleanedKitItems += k.items.length - cleanItems.length;
+    return cleanItems.length === k.items.length ? k : { ...k, items: cleanItems };
+  });
+  if (cleanedKitItems > 0) {
+    fixesApplied.push(`${cleanedKitItems} item(ns) inexistente(s) removido(s) de kits`);
+  }
+
+  let cleanedBannerRefs = 0;
+  const nextBanners = data.banners.map((b) => {
+    const cleanIds = b.featuredProductIds.filter((id) => validProductIds.has(id));
+    cleanedBannerRefs += b.featuredProductIds.length - cleanIds.length;
+    return cleanIds.length === b.featuredProductIds.length
+      ? b
+      : { ...b, featuredProductIds: cleanIds };
+  });
+  if (cleanedBannerRefs > 0) {
+    fixesApplied.push(`${cleanedBannerRefs} vínculo(s) obsoleto(s) limpo(s) nos banners`);
+  }
+
+  // 3. Deduplicate coupons & clamp invalid percent values
+  const seenCoupons = new Set<string>();
+  let fixedCoupons = 0;
+  const nextCoupons: PromoCoupon[] = [];
+  for (const cp of data.coupons) {
+    const code = cp.code.trim().toUpperCase();
+    if (seenCoupons.has(code)) {
+      fixedCoupons += 1;
+      continue;
+    }
+    seenCoupons.add(code);
+    let discountValue = cp.discountValue;
+    if (discountValue <= 0) {
+      discountValue = 5;
+      fixedCoupons += 1;
+    } else if (cp.discountType === 'percent' && discountValue > 100) {
+      discountValue = 100;
+      fixedCoupons += 1;
+    }
+    nextCoupons.push({
+      ...cp,
+      code,
+      discountValue,
+      minOrderValue: Math.max(0, cp.minOrderValue || 0),
+    });
+  }
+  if (fixedCoupons > 0) {
+    fixesApplied.push(`${fixedCoupons} ajuste(s) de integridade aplicado(s) nos cupons`);
+  }
+
+  return {
+    products: nextProducts,
+    kits: nextKits,
+    coupons: nextCoupons,
+    banners: nextBanners,
+    fixesApplied,
+  };
+}
+
 
 
 

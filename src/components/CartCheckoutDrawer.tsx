@@ -43,6 +43,7 @@ import {
   formatLogisticsModeLabel,
   formatPaymentMethodLabel,
   formatPhone,
+  generateNextOrderNumber,
   getEffectivePrice,
   getLogisticsSettings,
   isOrderQuoteOnly,
@@ -345,7 +346,7 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
       return;
     }
 
-    const nextOrderNumber = 1043 + existingOrders.length;
+    const nextOrderNumber = generateNextOrderNumber(existingOrders);
     const isInteriorMt = deliveryType === 'delivery' && city === 'Interior de MT';
     const orderDeliveryFee = isInteriorMt ? 0 : totals.deliveryFee;
     const orderTotal = isInteriorMt

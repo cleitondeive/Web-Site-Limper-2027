@@ -110,13 +110,16 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   }
 }
 
-function saveToStorage<T>(key: string, value: T): void {
-  if (typeof window === 'undefined') return;
+function saveToStorage<T>(key: string, value: T): boolean {
+  if (typeof window === 'undefined') return false;
+  // Always persist to IndexedDB first (high capacity) so large image uploads are never silently lost
+  syncToIndexedDB(key, value);
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
-    syncToIndexedDB(key, value);
+    return true;
   } catch {
-    // Ignore quota errors
+    // IndexedDB backup already scheduled; return false to indicate localStorage mirror quota reached
+    return false;
   }
 }
 

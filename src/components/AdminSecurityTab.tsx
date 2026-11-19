@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Trash2,
   UserCheck,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -32,6 +33,7 @@ import {
   ADMIN_ROLE_META,
   SECURITY_CATEGORY_LABELS,
   SECURITY_OUTCOME_META,
+  auditCatalogHealth,
   auditCustomerTrackingIsolation,
   buildSecurityAuditCsv,
   filterSecurityAuditEvents,
@@ -54,6 +56,7 @@ interface AdminSecurityTabProps {
   currentSitePayload?: SiteBackupPayload;
   onSaveSiteBackups?: (backups: SiteBackupSnapshot[]) => void;
   onRestoreSiteBackup?: (snapshot: SiteBackupSnapshot) => void;
+  onAutoRepairCatalog?: () => string[];
   isolationContext: {
     customerProfile: CustomerProfile;
     sessionOrderIds: string[];
@@ -74,6 +77,7 @@ export const AdminSecurityTab: React.FC<AdminSecurityTabProps> = ({
   currentSitePayload,
   onSaveSiteBackups,
   onRestoreSiteBackup,
+  onAutoRepairCatalog,
   isolationContext,
   onRecordSecurityEvent,
   onClearSecurityLogs,
@@ -100,6 +104,29 @@ export const AdminSecurityTab: React.FC<AdminSecurityTabProps> = ({
     () => auditCustomerTrackingIsolation(orders, isolationContext, auditRefreshTick),
     [orders, isolationContext, auditRefreshTick]
   );
+
+  const catalogHealth = useMemo(() => {
+    if (!currentSitePayload) return null;
+    return auditCatalogHealth({
+      categories: currentSitePayload.categories,
+      products: currentSitePayload.products,
+      kits: currentSitePayload.kits,
+      coupons: currentSitePayload.coupons,
+      banners: currentSitePayload.banners,
+      adminUsers: currentSitePayload.adminUsers,
+      siteBackups,
+    });
+  }, [currentSitePayload, siteBackups]);
+
+  const handleRunAutoRepair = () => {
+    if (!onAutoRepairCatalog) return;
+    const fixes = onAutoRepairCatalog();
+    if (fixes.length > 0) {
+      setAuditFeedback(`Auto-correção aplicada: ${fixes.join(' · ')}.`);
+    } else {
+      setAuditFeedback('Nenhuma inconsistência encontrada nos cadastros do sistema.');
+    }
+  };
 
   const logDateChips = useMemo(
     () => summarizeSecurityLogDates(securityLogs, 8),
@@ -1028,6 +1055,102 @@ export const AdminSecurityTab: React.FC<AdminSecurityTabProps> = ({
           </>
         )}
       </div>
+
+      {/* Real-Time Catalog & Data Integrity Diagnostics */}
+      {catalogHealth && (
+        <section
+          id="admin-catalog-health"
+          className="bg-white rounded-2xl border border-zinc-200 p-5 sm:p-6 space-y-4 shadow-2xs"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider text-zinc-500">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Auditoria Técnica de Cadastros em Tempo Real</span>
+              </div>
+              <h2 className="font-display text-base font-extrabold text-zinc-900">
+                Saúde & Integridade dos Dados ({catalogHealth.passedCount}/{catalogHealth.checks.length} verificações OK)
+              </h2>
+              <p className="text-xs text-zinc-500">
+                Validação contínua de SKUs únicos, vínculo de categorias, preços De/Por, referências de kits/banners, cupons e governança Master.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {catalogHealth.autoFixableCount > 0 && onAutoRepairCatalog ? (
+                <button
+                  type="button"
+                  onClick={handleRunAutoRepair}
+                  className="px-3.5 py-2 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Wrench className="w-3.5 h-3.5" />
+                  <span>Auto-Corrigir ({catalogHealth.autoFixableCount})</span>
+                </button>
+              ) : (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold ${
+                    catalogHealth.status === 'ok'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : catalogHealth.status === 'warning'
+                      ? 'bg-amber-50 text-amber-900 border-amber-200'
+                      : 'bg-rose-50 text-rose-800 border-rose-200'
+                  }`}
+                >
+                  {catalogHealth.status === 'ok' ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  ) : (
+                    <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                  )}
+                  <span>
+                    {catalogHealth.status === 'ok'
+                      ? 'Cadastros 100% Saudáveis'
+                      : `${catalogHealth.criticalCount + catalogHealth.warningCount} ponto(s) de atenção`}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+            {catalogHealth.checks.map((check) => (
+              <div
+                key={check.id}
+                className={`rounded-xl border p-3.5 space-y-1 ${
+                  check.severity === 'ok'
+                    ? 'bg-[#FAFAFA] border-zinc-200'
+                    : check.severity === 'warning'
+                    ? 'bg-amber-50/70 border-amber-200'
+                    : 'bg-rose-50/70 border-rose-200'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold text-zinc-900">
+                    {check.label}
+                  </span>
+                  <span
+                    className={`text-[10px] font-mono font-extrabold uppercase ${
+                      check.severity === 'ok'
+                        ? 'text-emerald-700'
+                        : check.severity === 'warning'
+                        ? 'text-amber-800'
+                        : 'text-rose-700'
+                    }`}
+                  >
+                    {check.severity === 'ok'
+                      ? 'OK'
+                      : check.severity === 'warning'
+                      ? 'Atenção'
+                      : 'Crítico'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-600 leading-relaxed">
+                  {check.detail}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Site Backup & Restore Vault (Master-Only) */}
       {currentSitePayload && onSaveSiteBackups && onRestoreSiteBackup && (

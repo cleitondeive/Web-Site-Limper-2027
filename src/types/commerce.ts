@@ -250,6 +250,7 @@ export interface PromoKitItem {
 
 export interface PromoKit {
   id: string;
+  sku?: string; // Padrão AAA-000 (ex: KIT-101)
   badge: string;
   title: string;
   description: string;

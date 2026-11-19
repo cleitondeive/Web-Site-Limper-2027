@@ -46,6 +46,7 @@ import {
   normalizeAdminUsername,
   validateAdminUserDraft,
 } from '../utils/commerce';
+import { optimizeUploadedImage } from '../utils/imageUtils';
 
 interface AdminUsersTabProps {
   users: AdminUser[];
@@ -278,29 +279,22 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
     );
   };
 
-  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setAvatarError(null);
-    if (!file.type.startsWith('image/')) {
-      setAvatarError('Envie apenas arquivos de imagem (JPG, PNG ou WEBP).');
+    const result = await optimizeUploadedImage(file, {
+      maxWidth: 400,
+      maxHeight: 400,
+      quality: 0.85,
+      maxSizeMb: 4,
+    });
+    if (!result.ok) {
+      setAvatarError(result.error);
       return;
     }
-    if (file.size > 3 * 1024 * 1024) {
-      setAvatarError('A imagem deve ter no máximo 3 MB.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setAvatarUrl(reader.result);
-      }
-    };
-    reader.onerror = () => {
-      setAvatarError('Não foi possível ler o arquivo de imagem selecionado.');
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
+    setAvatarUrl(result.dataUrl);
   };
 
   const handleSubmitForm = (e: React.FormEvent) => {

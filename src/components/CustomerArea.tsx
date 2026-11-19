@@ -908,11 +908,11 @@ export const CustomerAreaView: React.FC<CustomerAreaViewProps> = ({
   const handleOrderSupportWhatsApp = (order: Order) => {
     const cleanPhone = normalizePhone(settings.whatsappNumber) || '556530296824';
     const msg = `Olá, equipe Limper MT! Preciso de atendimento referente ao Pedido ${order.id} (Cliente: ${order.customerName}).`;
-    window.open(
-      `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`,
-      '_blank',
-      'noopener,noreferrer'
-    );
+    const link = document.createElement('a');
+    link.href = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.click();
   };
 
   return (

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertCircle,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
@@ -13,6 +14,7 @@ import {
   ChevronRight,
   ChevronsUp,
   Clock,
+  Command,
   Copy,
   Crown,
   DollarSign,
@@ -91,6 +93,7 @@ import {
   DEFAULT_PROMO_BADGE_COLOR,
   ORDER_STATUS_META,
   authenticateAdminUser,
+  autoRepairCatalogIntegrity,
   canAdminUserAccessTab,
   duplicateMultipleProducts,
   duplicateProductItem,
@@ -103,6 +106,8 @@ import {
   formatPageNumberLabel,
   formatPaymentMethodLabel,
   formatPhone,
+  generateAutoSku,
+  generateNextOrderNumber,
   getAdjacentOrderStatus,
   getDiscountPercentage,
   getEffectiveAllowedTabs,
@@ -122,7 +127,14 @@ import {
   summarizeOrdersPeriod,
   toDateKeyYmd,
   transitionOrderStatus,
+  validateBannerDraft,
+  validateCategoryDraft,
+  validateCouponDraft,
+  validateKitDraft,
+  validateProductDraft,
+  validateStoreSettingsDraft,
 } from '../utils/commerce';
+import { optimizeUploadedImage } from '../utils/imageUtils';
 import {
   GENERATED_IMAGES,
   INITIAL_BANNERS,
@@ -134,6 +146,7 @@ import {
   CategoryIcon,
   ProductImageWithFallback,
 } from './CategoryIcon';
+import { AdminCommandPalette } from './AdminCommandPalette';
 import { AdminSecurityTab } from './AdminSecurityTab';
 import { AdminUserAvatar, AdminUsersTab } from './AdminUsersTab';
 import { BadgeColorPicker } from './BadgeColorPicker';
@@ -268,9 +281,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  // Inline CRUD Form Validation & Feedback States
+  const [productFormError, setProductFormError] = useState<string | null>(null);
+  const [kitFormError, setKitFormError] = useState<string | null>(null);
+  const [bannerFormError, setBannerFormError] = useState<string | null>(null);
+  const [couponFormError, setCouponFormError] = useState<string | null>(null);
+  const [categoryFormError, setCategoryFormError] = useState<string | null>(null);
+  const [categoryFeedback, setCategoryFeedback] = useState<string | null>(null);
+  const [settingsFormError, setSettingsFormError] = useState<string | null>(null);
 
   const currentAdminUser =
-    effectiveAdminUsers.find((u) => u.id === currentAdminUserId) || null;
+    effectiveAdminUsers.find((u) => u.id === currentAdminUserId) ||
+    (isAuthenticated
+      ? effectiveAdminUsers.find((u) => u.role === 'master' && u.active) ||
+        effectiveAdminUsers[0] ||
+        null
+      : null);
 
   const toggleSidebarCollapsed = () => {
     setIsSidebarCollapsed((prev) => {
@@ -355,6 +383,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [editingKit, setEditingKit] = useState<PromoKit | null>(null);
   const [isKitFormOpen, setIsKitFormOpen] = useState(false);
   const [kitTitle, setKitTitle] = useState('');
+  const [kitSku, setKitSku] = useState('');
   const [kitBadge, setKitBadge] = useState('KIT ECONÔMICO LIMPER MT');
   const [kitDesc, setKitDesc] = useState('');
   const [kitPromoPrice, setKitPromoPrice] = useState('59.90');
@@ -458,6 +487,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setActiveTab(firstAllowed);
     }
   }, [isAuthenticated, currentAdminUser, activeTab]);
+
+  // Global Keyboard Shortcut: Ctrl+K / Cmd+K opens Admin Command Palette
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onGlobalKeyDown);
+    return () => window.removeEventListener('keydown', onGlobalKeyDown);
+  }, [isAuthenticated]);
 
   const recordAdminAction = (
     input: Omit<
@@ -641,7 +683,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (selectedItems.length === 0) return;
 
     const subtotal = selectedItems.reduce((acc, i) => acc + i.subtotal, 0);
-    const nextNum = 1043 + orders.length;
+    const nextNum = generateNextOrderNumber(orders);
     const newPosOrder: Order = {
       id: `#LMP-${nextNum}`,
       createdAt: new Date().toISOString(),
@@ -746,10 +788,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return `https://wa.me/${fullPhone}?text=${encodeURIComponent(message)}`;
   };
 
+  const getAllCatalogSkus = () => [
+    ...products.map((p) => p.sku),
+    ...kits.map((k) => k.sku || ''),
+  ];
+
+  const handleGenerateProductSku = () => {
+    const nextSku = generateAutoSku({
+      kind: 'product',
+      existingSkus: getAllCatalogSkus(),
+      currentSku: prodSku,
+      preferredPrefix: prodSku,
+      mode: 'random',
+    });
+    setProdSku(nextSku);
+    setProductFormError(null);
+  };
+
+  const handleGenerateKitSku = () => {
+    const nextSku = generateAutoSku({
+      kind: 'kit',
+      existingSkus: getAllCatalogSkus(),
+      currentSku: kitSku,
+      preferredPrefix: kitSku,
+      mode: 'random',
+    });
+    setKitSku(nextSku);
+    setKitFormError(null);
+  };
+
   const openCreateProduct = () => {
+    const nextSku = generateAutoSku({
+      kind: 'product',
+      existingSkus: getAllCatalogSkus(),
+      mode: 'sequential',
+    });
     setEditingProduct(null);
     setProdTitle('');
-    setProdSku(`QMP-${100 + products.length + 1}`);
+    setProdSku(nextSku);
     setProdDesc('');
     setProdCatId(categories[0]?.id || 'cat-casa');
     setProdPrice('39.90');
@@ -769,6 +845,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProdFeatured(false);
     setSelectedProductBannerIds([]);
     setImageUploadStatus(null);
+    setProductFormError(null);
     setIsProductFormOpen(true);
   };
 
@@ -804,34 +881,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       .map((b) => b.id);
     setSelectedProductBannerIds(currentBannerIds);
     setImageUploadStatus(null);
+    setProductFormError(null);
     setIsProductFormOpen(true);
   };
 
-  const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
-    const validMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validMimeTypes.includes(file.type)) {
-      setImageUploadStatus('Formato inválido. Selecione um arquivo JPG, PNG ou WEBP.');
+    const result = await optimizeUploadedImage(file, {
+      maxWidth: 960,
+      maxHeight: 960,
+      quality: 0.84,
+      maxSizeMb: 5,
+    });
+
+    if (!result.ok) {
+      setImageUploadStatus(result.error);
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setProdImage(reader.result);
-        setImageUploadStatus(`Arquivo "${file.name}" (${Math.round(file.size / 1024)} KB) carregado com sucesso!`);
-      }
-    };
-    reader.readAsDataURL(file);
+    setProdImage(result.dataUrl);
+    setImageUploadStatus(
+      result.wasCompressed
+        ? `Imagem "${file.name}" otimizada automaticamente (${result.originalKb} KB → ${result.optimizedKb} KB)!`
+        : `Arquivo "${file.name}" (${result.optimizedKb} KB) carregado com sucesso!`
+    );
   };
 
   const handleSaveProduct = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prodTitle.trim()) return;
+    setProductFormError(null);
 
-    const priceNum = Number(prodPrice.replace(',', '.')) || 0;
+    const parsedPrice = Number(prodPrice.replace(',', '.'));
+    const priceNum = Number.isFinite(parsedPrice) ? parsedPrice : -1;
     const promoNum = prodPromoPrice.trim()
       ? Number(prodPromoPrice.replace(',', '.'))
       : null;
@@ -839,6 +923,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       1,
       Math.min(12, Math.round(Number(prodInstallmentsCount) || 3))
     );
+
+    const validation = validateProductDraft(
+      {
+        title: prodTitle,
+        sku: prodSku,
+        price: priceNum,
+        promoPrice: promoNum,
+        categoryId: prodCatId,
+        installmentsCount: installmentsCountNum,
+      },
+      products,
+      editingProduct?.id || null
+    );
+    if (!validation.valid) {
+      setProductFormError(validation.error || 'Confira os campos do produto.');
+      return;
+    }
 
     const targetProdId = editingProduct ? editingProduct.id : `prod-${Date.now()}`;
     const unlockingLegacyGlobalHide = prodShowPrice && settings.hideAllPrices;
@@ -909,7 +1010,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } else {
       const newProd: Product = {
         id: targetProdId,
-        sku: prodSku.trim() || `QMP-${products.length + 1}`,
+        sku:
+          prodSku.trim().toUpperCase() ||
+          generateAutoSku({
+            kind: 'product',
+            existingSkus: getAllCatalogSkus(),
+            mode: 'sequential',
+          }),
         title: prodTitle.trim(),
         description: prodDesc.trim() || 'Produto da linha profissional Quimiprol.',
         categoryId: prodCatId,
@@ -1275,8 +1382,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Kits & Combos Handlers
   const openCreateKit = () => {
+    const nextKitSku = generateAutoSku({
+      kind: 'kit',
+      existingSkus: getAllCatalogSkus(),
+      mode: 'sequential',
+    });
     setEditingKit(null);
     setKitTitle('');
+    setKitSku(nextKitSku);
     setKitBadge('KIT PROMOCIONAL LIMPER MT');
     setKitDesc('');
     setKitPromoPrice('64.90');
@@ -1284,16 +1397,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setKitActive(true);
     setKitImage(GENERATED_IMAGES.prodCasa);
     setKitImageUploadStatus(null);
-    setKitQuantities({
-      'prod-casa-1': 1,
-      'prod-casa-3': 1,
-    });
+    setKitFormError(null);
+    const defaultKitItems: Record<string, number> = {};
+    products
+      .filter((p) => p.status === 'active')
+      .slice(0, 2)
+      .forEach((p) => {
+        defaultKitItems[p.id] = 1;
+      });
+    setKitQuantities(defaultKitItems);
     setIsKitFormOpen(true);
   };
 
   const openEditKit = (kit: PromoKit) => {
     setEditingKit(kit);
     setKitTitle(kit.title);
+    setKitSku(kit.sku || '');
     setKitBadge(kit.badge);
     setKitDesc(kit.description);
     setKitPromoPrice(String(kit.promoPrice));
@@ -1301,6 +1420,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setKitActive(kit.active);
     setKitImage(kit.imageUrl || GENERATED_IMAGES.prodCasa);
     setKitImageUploadStatus(null);
+    setKitFormError(null);
     const map: Record<string, number> = {};
     kit.items.forEach((item) => {
       map[item.productId] = item.quantity;
@@ -1309,44 +1429,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsKitFormOpen(true);
   };
 
-  const handleKitImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleKitImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
-    const validMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validMimeTypes.includes(file.type)) {
-      setKitImageUploadStatus('Formato inválido. Selecione um arquivo JPG, PNG ou WEBP.');
+    const result = await optimizeUploadedImage(file, {
+      maxWidth: 960,
+      maxHeight: 960,
+      quality: 0.84,
+      maxSizeMb: 5,
+    });
+    if (!result.ok) {
+      setKitImageUploadStatus(result.error);
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setKitImage(reader.result);
-        setKitImageUploadStatus(
-          `Imagem do Kit "${file.name}" (${Math.round(file.size / 1024)} KB) carregada com sucesso!`
-        );
-      }
-    };
-    reader.readAsDataURL(file);
+    setKitImage(result.dataUrl);
+    setKitImageUploadStatus(
+      result.wasCompressed
+        ? `Imagem do Kit "${file.name}" otimizada (${result.originalKb} KB → ${result.optimizedKb} KB)!`
+        : `Imagem do Kit "${file.name}" (${result.optimizedKb} KB) carregada com sucesso!`
+    );
   };
 
   const handleSaveKit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!kitTitle.trim()) return;
+    setKitFormError(null);
 
     const selectedItems = Object.entries(kitQuantities)
       .filter(([, qty]) => qty > 0)
       .map(([productId, quantity]) => ({ productId, quantity }));
-
-    if (selectedItems.length === 0) return;
 
     const regularSum = selectedItems.reduce((acc, item) => {
       const p = products.find((prod) => prod.id === item.productId);
       return acc + (p ? getEffectivePrice(p) * item.quantity : 0);
     }, 0);
 
-    const promoNum = Number(kitPromoPrice.replace(',', '.')) || regularSum;
+    const promoNum = kitPromoPrice.trim()
+      ? Number(kitPromoPrice.replace(',', '.'))
+      : regularSum;
+
+    const resolvedKitSku =
+      kitSku.trim().toUpperCase() ||
+      (editingKit?.sku?.trim().toUpperCase() ||
+        generateAutoSku({
+          kind: 'kit',
+          existingSkus: getAllCatalogSkus(),
+          mode: 'sequential',
+        }));
+
+    const kitValidation = validateKitDraft(
+      {
+        title: kitTitle,
+        sku: resolvedKitSku,
+        promoPrice: promoNum,
+        items: selectedItems,
+      },
+      products,
+      kits,
+      editingKit?.id || null
+    );
+    if (!kitValidation.valid) {
+      setKitFormError(kitValidation.error || 'Verifique os campos do kit.');
+      return;
+    }
+
     const unlockingLegacyGlobalHide = kitShowPrice && settings.hideAllPrices;
 
     if (unlockingLegacyGlobalHide) {
@@ -1364,6 +1511,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (k.id === editingKit.id) {
           return {
             ...k,
+            sku: resolvedKitSku,
             title: kitTitle.trim(),
             badge: kitBadge.trim() || 'KIT LIMPER MT',
             description: kitDesc.trim(),
@@ -1380,6 +1528,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } else {
       const newKit: PromoKit = {
         id: `kit-${Date.now()}`,
+        sku: resolvedKitSku,
         title: kitTitle.trim(),
         badge: kitBadge.trim() || 'KIT LIMPER MT',
         description:
@@ -1405,11 +1554,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     recordAdminAction({
       category: 'catalog_policy',
       outcome: 'info',
-      rawTarget: kitTitle.trim(),
+      rawTarget: resolvedKitSku,
       summary: editingKit
         ? `Kit atualizado: ${kitTitle.trim()}`
         : `Novo kit cadastrado: ${kitTitle.trim()}`,
-      detail: `${selectedItems.length} produto(s) · Valor promocional ${formatCurrency(promoNum)}.`,
+      detail: `SKU ${resolvedKitSku} · ${selectedItems.length} produto(s) · Valor promocional ${formatCurrency(promoNum)}.`,
     });
 
     setIsKitFormOpen(false);
@@ -1447,7 +1596,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDeleteKit = (kitId: string) => {
+    const target = kits.find((k) => k.id === kitId);
     onSaveKits(kits.filter((k) => k.id !== kitId));
+    if (target) {
+      recordAdminAction({
+        category: 'catalog_policy',
+        outcome: 'info',
+        rawTarget: target.title,
+        summary: `Kit removido: ${target.title}`,
+        detail: 'Combo promocional excluído da vitrine.',
+      });
+    }
   };
 
   // Banner & Promotional Campaign Handlers
@@ -1461,8 +1620,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setBannerTheme('yellow_red');
     setBannerImage(GENERATED_IMAGES.prodLavanderia);
     setBannerImageUploadStatus(null);
+    setBannerFormError(null);
     setBannerCategoryId(categories[0]?.id || 'cat-casa');
-    setBannerFeaturedProductIds(['prod-casa-3', 'prod-lav-1']);
+    setBannerFeaturedProductIds(
+      products
+        .filter((p) => p.status === 'active')
+        .slice(0, 2)
+        .map((p) => p.id)
+    );
     setBannerProductSearch('');
     setBannerActive(true);
     setIsBannerFormOpen(true);
@@ -1478,6 +1643,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setBannerTheme(banner.theme);
     setBannerImage(banner.imageUrl);
     setBannerImageUploadStatus(null);
+    setBannerFormError(null);
     setBannerCategoryId(banner.linkedCategoryId || '');
     setBannerFeaturedProductIds(banner.featuredProductIds);
     setBannerProductSearch('');
@@ -1485,29 +1651,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsBannerFormOpen(true);
   };
 
-  const handleBannerImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBannerImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const validMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validMimeTypes.includes(file.type)) {
-      setBannerImageUploadStatus('Formato inválido. Selecione JPG, PNG ou WEBP.');
+    const result = await optimizeUploadedImage(file, {
+      maxWidth: 1440,
+      maxHeight: 900,
+      quality: 0.84,
+      maxSizeMb: 5,
+    });
+    if (!result.ok) {
+      setBannerImageUploadStatus(result.error);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setBannerImage(reader.result);
-        setBannerImageUploadStatus(
-          `Banner "${file.name}" (${Math.round(file.size / 1024)} KB) carregado!`
-        );
-      }
-    };
-    reader.readAsDataURL(file);
+    setBannerImage(result.dataUrl);
+    setBannerImageUploadStatus(
+      result.wasCompressed
+        ? `Banner "${file.name}" otimizado (${result.originalKb} KB → ${result.optimizedKb} KB)!`
+        : `Banner "${file.name}" (${result.optimizedKb} KB) carregado!`
+    );
   };
 
   const handleSaveBanner = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bannerTitle.trim() || !onSaveBanners) return;
+    setBannerFormError(null);
+    if (!onSaveBanners) return;
+    const bannerValidation = validateBannerDraft({ title: bannerTitle });
+    if (!bannerValidation.valid) {
+      setBannerFormError(bannerValidation.error || 'Confira os campos do banner.');
+      return;
+    }
 
     if (editingBanner) {
       const updated = banners.map((b) =>
@@ -1570,7 +1744,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeleteBanner = (bannerId: string) => {
     if (!onSaveBanners) return;
+    const target = banners.find((b) => b.id === bannerId);
     onSaveBanners(banners.filter((b) => b.id !== bannerId));
+    if (target) {
+      recordAdminAction({
+        category: 'catalog_policy',
+        outcome: 'info',
+        rawTarget: target.title,
+        summary: `Banner removido: ${target.title}`,
+        detail: `Campanha removida do slot ${target.slot}.`,
+      });
+    }
   };
 
   const handleReorderBanner = (bannerId: string, dir: 'up' | 'down') => {
@@ -1595,6 +1779,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setCouponValue('10');
     setCouponMinOrder('0');
     setCouponActive(true);
+    setCouponFormError(null);
     setIsCouponFormOpen(true);
   };
 
@@ -1606,15 +1791,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setCouponValue(String(cp.discountValue));
     setCouponMinOrder(String(cp.minOrderValue || 0));
     setCouponActive(cp.active);
+    setCouponFormError(null);
     setIsCouponFormOpen(true);
   };
 
   const handleSaveCoupon = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!couponCode.trim() || !onSaveCoupons) return;
+    setCouponFormError(null);
+    if (!onSaveCoupons) return;
+
     const cleanCode = couponCode.trim().toUpperCase().replace(/\s+/g, '');
-    const valNum = Number(couponValue.replace(',', '.')) || 0;
-    const minNum = Number(couponMinOrder.replace(',', '.')) || 0;
+    const valNum = Number(couponValue.replace(',', '.'));
+    const minNum = couponMinOrder.trim()
+      ? Number(couponMinOrder.replace(',', '.'))
+      : 0;
+
+    const validation = validateCouponDraft(
+      {
+        code: cleanCode,
+        discountType: couponType,
+        discountValue: valNum,
+        minOrderValue: minNum,
+      },
+      coupons,
+      editingCoupon?.id || null
+    );
+    if (!validation.valid) {
+      setCouponFormError(validation.error || 'Verifique os dados do cupom.');
+      return;
+    }
 
     if (editingCoupon) {
       const updated = coupons.map((c) =>
@@ -1674,13 +1879,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeleteCoupon = (cpId: string) => {
     if (!onSaveCoupons) return;
+    const target = coupons.find((c) => c.id === cpId);
     onSaveCoupons(coupons.filter((c) => c.id !== cpId));
+    if (target) {
+      recordAdminAction({
+        category: 'catalog_policy',
+        outcome: 'info',
+        rawTarget: target.code,
+        summary: `Cupom removido: ${target.code}`,
+        detail: 'Cupom promocional excluído da loja.',
+      });
+    }
   };
 
   // Categories Handlers
   const handleSaveCategory = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!catName.trim()) return;
+    setCategoryFormError(null);
+    setCategoryFeedback(null);
+
+    const validation = validateCategoryDraft(
+      { name: catName },
+      categories,
+      editingCategory?.id || null
+    );
+    if (!validation.valid) {
+      setCategoryFormError(validation.error || 'Confira o nome da categoria.');
+      return;
+    }
 
     if (editingCategory) {
       const updated = categories.map((c) =>
@@ -1696,6 +1922,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       );
       onSaveCategories(updated);
       setEditingCategory(null);
+      setCategoryFeedback(`Categoria "${catName.trim()}" atualizada com sucesso.`);
     } else {
       const newCat: Category = {
         id: `cat-${Date.now()}`,
@@ -1706,6 +1933,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         order: categories.length + 1,
       };
       onSaveCategories([...categories, newCat]);
+      setCategoryFeedback(`Nova categoria "${catName.trim()}" adicionada à vitrine.`);
     }
     recordAdminAction({
       category: 'catalog_policy',
@@ -1739,22 +1967,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDeleteCategory = (catId: string) => {
+    setCategoryFormError(null);
+    setCategoryFeedback(null);
     const target = categories.find((c) => c.id === catId);
-    onSaveCategories(categories.filter((c) => c.id !== catId));
+    const remaining = categories.filter((c) => c.id !== catId);
+    if (remaining.length === 0) {
+      setCategoryFormError(
+        'O catálogo precisa manter pelo menos 1 categoria ativa.'
+      );
+      return;
+    }
+
+    const fallbackCat = remaining[0];
+    const affectedCount = products.filter((p) => p.categoryId === catId).length;
+    if (affectedCount > 0) {
+      onSaveProducts(
+        products.map((p) =>
+          p.categoryId === catId ? { ...p, categoryId: fallbackCat.id } : p
+        )
+      );
+    }
+
+    onSaveCategories(remaining);
     if (target) {
       recordAdminAction({
         category: 'catalog_policy',
         outcome: 'info',
         rawTarget: target.name,
         summary: `Categoria removida: ${target.name}`,
-        detail: 'Linha removida da organização do catálogo.',
+        detail:
+          affectedCount > 0
+            ? `${affectedCount} produto(s) vinculado(s) realocado(s) automaticamente para "${fallbackCat.name}".`
+            : 'Linha removida da organização do catálogo.',
+      });
+      setCategoryFeedback(
+        affectedCount > 0
+          ? `Categoria "${target.name}" removida. ${affectedCount} produto(s) realocado(s) para "${fallbackCat.name}" sem perda de dados.`
+          : `Categoria "${target.name}" removida.`
+      );
+    }
+  };
+
+  const handleAutoRepairCatalog = (): string[] => {
+    const repair = autoRepairCatalogIntegrity({
+      categories,
+      products,
+      kits,
+      coupons,
+      banners,
+    });
+    if (repair.fixesApplied.length > 0) {
+      onSaveProducts(repair.products);
+      onSaveKits(repair.kits);
+      onSaveCoupons?.(repair.coupons);
+      onSaveBanners?.(repair.banners);
+      recordAdminAction({
+        category: 'catalog_policy',
+        outcome: 'allowed',
+        rawTarget: `${repair.fixesApplied.length} ajuste(s)`,
+        summary: 'Auto-correção de integridade dos cadastros executada',
+        detail: repair.fixesApplied.join(' · '),
       });
     }
+    return repair.fixesApplied;
   };
 
   // Settings Handlers
   const handleSaveSettingsSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setSettingsFormError(null);
+    const validation = validateStoreSettingsDraft(formSettings);
+    if (!validation.valid) {
+      setSettingsFormError(validation.error || 'Confira os valores numéricos de frete e logística.');
+      return;
+    }
     onSaveSettings(formSettings);
     recordAdminAction({
       category: 'catalog_policy',
@@ -1768,15 +2054,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleAddNeighborhood = () => {
-    if (!newNeighborhoodName.trim()) return;
-    const fee = Number(newNeighborhoodFee.replace(',', '.')) || 0;
+    setSettingsFormError(null);
+    const cleanName = newNeighborhoodName.trim();
+    if (!cleanName) return;
+    const fee = Math.max(0, Number(newNeighborhoodFee.replace(',', '.')) || 0);
+    const alreadyExists = formSettings.neighborhoodFees.some(
+      (n) =>
+        n.name.trim().toLowerCase() === cleanName.toLowerCase() &&
+        n.city === newNeighborhoodCity
+    );
+    if (alreadyExists) {
+      setSettingsFormError(
+        `O bairro "${cleanName}" (${newNeighborhoodCity}) já está cadastrado na tabela de frete.`
+      );
+      return;
+    }
     const updated: StoreSettings = {
       ...formSettings,
       neighborhoodFees: [
         ...formSettings.neighborhoodFees,
         {
           id: `nb-${Date.now()}`,
-          name: newNeighborhoodName.trim(),
+          name: cleanName,
           city: newNeighborhoodCity,
           fee,
         },
@@ -2184,6 +2483,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsCommandPaletteOpen(true)}
+              aria-label="Abrir busca rápida e comandos (Ctrl+K)"
+              title="Busca rápida de produtos, pedidos e ações (Ctrl+K)"
+              className="inline-flex items-center gap-2 h-9 px-2.5 sm:px-3 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-[#FFFBEB] hover:border-[#FFBE00] text-zinc-600 hover:text-zinc-950 text-xs font-bold cursor-pointer transition-colors whitespace-nowrap"
+            >
+              <Search className="w-3.5 h-3.5 text-[#E3262E]" />
+              <span className="hidden md:inline">Busca rápida</span>
+              <span className="hidden xl:inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white border border-zinc-200 font-mono text-[10px] font-extrabold text-zinc-500">
+                <Command className="w-2.5 h-2.5" />K
+              </span>
+            </button>
+
             {currentAdminUser && (
               <div
                 className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-[#FAFAFA] border border-zinc-200"
@@ -4094,6 +4407,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </button>
                     </div>
 
+                    {productFormError && (
+                      <div
+                        role="alert"
+                        className="mx-5 mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                      >
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{productFormError}</span>
+                      </div>
+                    )}
+
                     {/* 2-Column Studio Body: 8 cols Editor + 4 cols Live Storefront Preview */}
                     <div className="p-5 bg-[#F8F9FA] grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
                       {/* LEFT COLUMN: STRUCTURED FORM SECTIONS */}
@@ -4113,7 +4436,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                            <div className="sm:col-span-8">
+                            <div className="sm:col-span-7">
                               <label className="block text-xs font-bold text-zinc-700 mb-1">
                                 Título do Produto *
                               </label>
@@ -4126,17 +4449,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 className="w-full px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-lg text-sm font-semibold text-zinc-900"
                               />
                             </div>
-                            <div className="sm:col-span-4">
-                              <label className="block text-xs font-bold text-zinc-700 mb-1">
-                                Código SKU / Ref.
-                              </label>
-                              <input
-                                type="text"
-                                value={prodSku}
-                                onChange={(e) => setProdSku(e.target.value)}
-                                placeholder="QMP-101"
-                                className="w-full px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-lg text-sm font-mono text-zinc-900"
-                              />
+                            <div className="sm:col-span-5">
+                              <div className="flex items-center justify-between mb-1">
+                                <label
+                                  htmlFor="admin-prod-sku-input"
+                                  className="block text-xs font-bold text-zinc-700"
+                                >
+                                  Código SKU / Ref.
+                                </label>
+                                <span className="text-[10px] font-mono text-zinc-400">
+                                  Padrão AAA-000
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  id="admin-prod-sku-input"
+                                  type="text"
+                                  value={prodSku}
+                                  onChange={(e) => setProdSku(e.target.value.toUpperCase())}
+                                  placeholder="QMP-102"
+                                  className="w-full min-w-0 px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-lg text-sm font-mono uppercase text-zinc-900"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={handleGenerateProductSku}
+                                  aria-label="Gerar SKU automático para o produto"
+                                  title="Gerar código SKU automático (3 letras + 3 números, ex: QMP-102)"
+                                  className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#FFFBEB] hover:bg-[#FFBE00] border border-[#FFBE00] text-zinc-950 text-xs font-extrabold transition-colors cursor-pointer whitespace-nowrap"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 text-[#E3262E]" />
+                                  <span>Gerar SKU</span>
+                                </button>
+                              </div>
                             </div>
                           </div>
 
@@ -5525,10 +5869,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   </div>
 
+                  {kitFormError && (
+                    <div
+                      role="alert"
+                      className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                    >
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{kitFormError}</span>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                     <div className="lg:col-span-7 space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                        <div className="sm:col-span-7">
                           <label className="block text-xs font-bold text-zinc-700 mb-1">
                             Nome do Kit / Combo *
                           </label>
@@ -5538,9 +5892,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             value={kitTitle}
                             onChange={(e) => setKitTitle(e.target.value)}
                             placeholder="Ex: Kit Limpeza Pesada Pós-Obra 5L"
-                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                            className="w-full px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-xl text-xs font-semibold text-zinc-900"
                           />
                         </div>
+                        <div className="sm:col-span-5">
+                          <div className="flex items-center justify-between mb-1">
+                            <label
+                              htmlFor="admin-kit-sku-input"
+                              className="block text-xs font-bold text-zinc-700"
+                            >
+                              Código SKU / Ref.
+                            </label>
+                            <span className="text-[10px] font-mono text-zinc-400">
+                              Padrão AAA-000
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              id="admin-kit-sku-input"
+                              type="text"
+                              value={kitSku}
+                              onChange={(e) => setKitSku(e.target.value.toUpperCase())}
+                              placeholder="KIT-101"
+                              className="w-full min-w-0 px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-xl text-xs font-mono uppercase text-zinc-900"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleGenerateKitSku}
+                              aria-label="Gerar SKU automático para o kit"
+                              title="Gerar código SKU automático (3 letras + 3 números, ex: KIT-101)"
+                              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FFFBEB] hover:bg-[#FFBE00] border border-[#FFBE00] text-zinc-950 text-xs font-extrabold transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-[#E3262E]" />
+                              <span>Gerar SKU</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-xs font-bold text-zinc-700 mb-1">
                             Selo / Tag de Destaque *
@@ -5551,22 +5941,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             value={kitBadge}
                             onChange={(e) => setKitBadge(e.target.value)}
                             placeholder="Ex: KIT CASA PERFUMADA · ECONOMIZE R$ 15"
-                            className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
+                            className="w-full px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-xl text-xs font-mono"
                           />
                         </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-zinc-700 mb-1">
-                          Descrição Comercial do Kit
-                        </label>
-                        <input
-                          type="text"
-                          value={kitDesc}
-                          onChange={(e) => setKitDesc(e.target.value)}
-                          placeholder="Ex: Cloro Concentrado 5L + Limpa Pedras 5L + Detergente Clorado 5L"
-                          className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
-                        />
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-700 mb-1">
+                            Descrição Comercial do Kit
+                          </label>
+                          <input
+                            type="text"
+                            value={kitDesc}
+                            onChange={(e) => setKitDesc(e.target.value)}
+                            placeholder="Ex: Cloro Concentrado 5L + Limpa Pedras 5L + Detergente Clorado 5L"
+                            className="w-full px-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-xl text-xs"
+                          />
+                        </div>
                       </div>
 
                       {/* Composição de Produtos do Kit com Busca na Lupa ("Puxar item já cadastrado na lupa e adicionar no kit") */}
@@ -6009,6 +6398,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
 
                         <div className="p-4 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 font-mono text-[10px] font-bold text-zinc-600">
+                              SKU {kit.sku || `KIT-${kit.id.replace(/^kit-/i, '').toUpperCase()}`}
+                            </span>
+                            <span className="text-[10px] font-mono text-zinc-400">
+                              {resolvedItems.reduce((acc, e) => acc + e.quantity, 0)} un.
+                            </span>
+                          </div>
                           <h3 className="font-display text-sm font-extrabold text-zinc-900">
                             {kit.title}
                           </h3>
@@ -6128,6 +6525,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       Cancelar
                     </button>
                   </div>
+
+                  {bannerFormError && (
+                    <div
+                      role="alert"
+                      className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                    >
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{bannerFormError}</span>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                     <div className="lg:col-span-7 space-y-4">
@@ -6569,6 +6976,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   </div>
 
+                  {couponFormError && (
+                    <div
+                      role="alert"
+                      className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                    >
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{couponFormError}</span>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-zinc-700 mb-1">
@@ -6753,6 +7170,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   )}
                 </div>
+
+                {categoryFormError && (
+                  <div
+                    role="alert"
+                    className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                  >
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{categoryFormError}</span>
+                  </div>
+                )}
+
+                {categoryFeedback && (
+                  <div
+                    role="status"
+                    className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold flex items-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{categoryFeedback}</span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="sm:col-span-2">
@@ -7046,6 +7483,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <h2 className="font-display text-lg font-extrabold text-zinc-900">
                   Dados de Recebimento PIX, Endereço & Telefone Oficial
                 </h2>
+
+                {settingsFormError && (
+                  <div
+                    role="alert"
+                    className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                  >
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{settingsFormError}</span>
+                  </div>
+                )}
 
                 {savedSettingsBanner && (
                   <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
@@ -7525,6 +7972,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }}
               onSaveSiteBackups={persistSiteBackups}
               onRestoreSiteBackup={handleRestoreBackupSnapshot}
+              onAutoRepairCatalog={handleAutoRepairCatalog}
               isolationContext={isolationContext}
               onRecordSecurityEvent={(input) => onRecordSecurityEvent?.(input)}
               onClearSecurityLogs={() => onClearSecurityLogs?.()}
@@ -7532,6 +7980,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
         </div>
       </div>
+
+      {/* GLOBAL ADMIN COMMAND PALETTE (CTRL+K / CMD+K) */}
+      <AdminCommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        currentUser={currentAdminUser}
+        products={products}
+        orders={orders}
+        onNavigateTab={(tab) => setActiveTab(tab)}
+        onQuickCreateProduct={() => {
+          setActiveTab('products');
+          openCreateProduct();
+        }}
+        onQuickCreateKit={() => {
+          setActiveTab('kits');
+          openCreateKit();
+        }}
+        onQuickCreateBanner={() => {
+          setActiveTab('banners');
+          openCreateBanner();
+        }}
+        onQuickCreateCoupon={() => {
+          setActiveTab('coupons');
+          openCreateCoupon();
+        }}
+        onEditProduct={(prod) => {
+          setActiveTab('products');
+          openEditProduct(prod);
+        }}
+        onOpenOrderInKanban={(orderId) => {
+          setActiveTab('kanban');
+          setKanbanDatePreset('all');
+          setKanbanSearchQuery(orderId);
+        }}
+        onOpenBackupVault={() => {
+          setActiveTab('security');
+          window.setTimeout(() => {
+            document
+              .getElementById('admin-backup-vault')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 80);
+        }}
+      />
 
       {/* PRINTABLE PICKING COMMAND MODAL (COMANDA DE SEPARAÇÃO) */}
       {printOrder && (

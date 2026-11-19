@@ -10,8 +10,10 @@ import {
   addToCart,
   appendSecurityAuditEvent,
   appendSiteBackupSnapshot,
+  auditCatalogHealth,
   auditCustomerTrackingIsolation,
   authenticateAdminUser,
+  autoRepairCatalogIntegrity,
   buildKitCartProduct,
   buildLogisticsWhatsAppConsultUrl,
   buildSecurityAuditCsv,
@@ -43,6 +45,8 @@ import {
   formatLogisticsModeLabel,
   formatPageNumberLabel,
   formatPhone,
+  generateAutoSku,
+  generateNextOrderNumber,
   getAdjacentOrderStatus,
   getContrastTextColor,
   getCustomerAddresses,
@@ -85,7 +89,13 @@ import {
   updateCartQuantity,
   upsertCustomerAddress,
   validateAdminUserDraft,
+  validateBannerDraft,
+  validateCategoryDraft,
   validateCheckoutInput,
+  validateCouponDraft,
+  validateKitDraft,
+  validateProductDraft,
+  validateStoreSettingsDraft,
 } from './commerce';
 import {
   detectDocumentType,
@@ -101,6 +111,7 @@ import {
 import {
   INITIAL_BANNERS,
   INITIAL_CATEGORIES,
+  INITIAL_COUPONS,
   INITIAL_KITS,
   INITIAL_ORDERS,
   INITIAL_PRODUCTS,
@@ -1826,6 +1837,246 @@ test('Site Backup Vault engine creates immutable dated snapshots, filters by dat
   );
   assert.equal(incompatibleJson.ok, false);
 });
+
+test('generateNextOrderNumber prevents #LMP order ID collisions and CRUD validators reject invalid drafts', () => {
+  // Collision-free order numbering even with gaps or high numbers
+  assert.equal(
+    generateNextOrderNumber([{ id: '#LMP-1043' }, { id: '#LMP-1099' }, { id: '#LMP-1045' }]),
+    1100
+  );
+  assert.equal(generateNextOrderNumber([]), 1044);
+
+  // Product validator: duplicate SKU and promo >= regular price rejected
+  const dupSku = validateProductDraft(
+    {
+      title: 'Detergente Teste',
+      sku: INITIAL_PRODUCTS[0].sku.toLowerCase(),
+      price: 30,
+      promoPrice: 25,
+      categoryId: 'cat-casa',
+    },
+    INITIAL_PRODUCTS
+  );
+  assert.equal(dupSku.valid, false);
+  assert.ok(dupSku.error?.includes('SKU'));
+
+  const badPromo = validateProductDraft(
+    {
+      title: 'Detergente Teste',
+      sku: 'QMP-999',
+      price: 20,
+      promoPrice: 25,
+      categoryId: 'cat-casa',
+    },
+    INITIAL_PRODUCTS
+  );
+  assert.equal(badPromo.valid, false);
+  assert.ok(badPromo.error?.includes('menor'));
+
+  const okProduct = validateProductDraft(
+    {
+      title: 'Detergente Neutro 5L',
+      sku: 'QMP-999',
+      price: 30,
+      promoPrice: 24.9,
+      categoryId: 'cat-casa',
+      installmentsCount: 3,
+    },
+    INITIAL_PRODUCTS
+  );
+  assert.equal(okProduct.valid, true);
+
+  // Kit validator rejects empty or ghost product items
+  assert.equal(
+    validateKitDraft({ title: 'Kit Vazio', promoPrice: 50, items: [] }, INITIAL_PRODUCTS).valid,
+    false
+  );
+  assert.equal(
+    validateKitDraft(
+      { title: 'Kit Fantasma', promoPrice: 50, items: [{ productId: 'does-not-exist', quantity: 1 }] },
+      INITIAL_PRODUCTS
+    ).valid,
+    false
+  );
+
+  // Coupon validator rejects duplicate code and >100% discount
+  assert.equal(
+    validateCouponDraft(
+      { code: INITIAL_COUPONS[0].code, discountType: 'percent', discountValue: 10, minOrderValue: 0 },
+      INITIAL_COUPONS
+    ).valid,
+    false
+  );
+  assert.equal(
+    validateCouponDraft(
+      { code: 'SUPER200', discountType: 'percent', discountValue: 120, minOrderValue: 0 },
+      INITIAL_COUPONS
+    ).valid,
+    false
+  );
+
+  // Category & Banner & Store settings validators
+  assert.equal(
+    validateCategoryDraft({ name: INITIAL_CATEGORIES[0].name }, INITIAL_CATEGORIES).valid,
+    false
+  );
+  assert.equal(validateBannerDraft({ title: 'A' }).valid, false);
+  assert.equal(
+    validateStoreSettingsDraft({ ...INITIAL_STORE_SETTINGS, defaultDeliveryFee: -5 }).valid,
+    false
+  );
+});
+
+test('auditCatalogHealth detects real registration anomalies and autoRepairCatalogIntegrity fixes them cleanly', () => {
+  // Baseline initial catalog has zero critical/fixable issues
+  const cleanReport = auditCatalogHealth({
+    categories: INITIAL_CATEGORIES,
+    products: INITIAL_PRODUCTS,
+    kits: INITIAL_KITS,
+    coupons: INITIAL_COUPONS,
+    banners: INITIAL_BANNERS,
+    adminUsers: DEFAULT_ADMIN_USERS,
+    siteBackups: [],
+  });
+  assert.equal(cleanReport.criticalCount, 0);
+  assert.equal(cleanReport.autoFixableCount, 0);
+
+  // Inject real defects: duplicate SKU, orphaned category, promo >= price, ghost kit ref, duplicate coupon + >100%
+  const brokenProducts = [
+    { ...INITIAL_PRODUCTS[0], sku: 'QMP-DUP', categoryId: 'cat-deleted', promoPrice: 999 },
+    { ...INITIAL_PRODUCTS[1], sku: 'QMP-DUP' },
+  ];
+  const brokenKits = [
+    { ...INITIAL_KITS[0], items: [{ productId: brokenProducts[0].id, quantity: 1 }, { productId: 'ghost-prod', quantity: 2 }] },
+  ];
+  const brokenCoupons = [
+    { ...INITIAL_COUPONS[0], code: 'DUP10', discountType: 'percent' as const, discountValue: 150 },
+    { ...INITIAL_COUPONS[1], code: 'DUP10', discountType: 'percent' as const, discountValue: 10 },
+  ];
+  const brokenBanners = [
+    { ...INITIAL_BANNERS[0], featuredProductIds: [brokenProducts[0].id, 'ghost-prod'] },
+  ];
+
+  const dirtyReport = auditCatalogHealth({
+    categories: INITIAL_CATEGORIES,
+    products: brokenProducts,
+    kits: brokenKits,
+    coupons: brokenCoupons,
+    banners: brokenBanners,
+    adminUsers: DEFAULT_ADMIN_USERS,
+    siteBackups: [],
+  });
+  assert.ok(dirtyReport.criticalCount >= 2);
+  assert.ok(dirtyReport.autoFixableCount >= 4);
+
+  const repaired = autoRepairCatalogIntegrity({
+    categories: INITIAL_CATEGORIES,
+    products: brokenProducts,
+    kits: brokenKits,
+    coupons: brokenCoupons,
+    banners: brokenBanners,
+  });
+  assert.ok(repaired.fixesApplied.length >= 4);
+
+  const postRepairReport = auditCatalogHealth({
+    categories: INITIAL_CATEGORIES,
+    products: repaired.products,
+    kits: repaired.kits,
+    coupons: repaired.coupons,
+    banners: repaired.banners,
+    adminUsers: DEFAULT_ADMIN_USERS,
+    siteBackups: [],
+  });
+  assert.equal(postRepairReport.criticalCount, 0);
+  assert.equal(postRepairReport.autoFixableCount, 0);
+});
+
+test('generateAutoSku produces unique AAA-000 codes for products and kits and validates kit SKUs', () => {
+  const skuRegex = /^[A-Z]{3}-\d{3}$/;
+  const existingSkus = INITIAL_PRODUCTS.map((p) => p.sku);
+
+  // Sequential product SKU avoids collisions with existing catalog
+  const prodSeq = generateAutoSku({
+    kind: 'product',
+    existingSkus,
+    mode: 'sequential',
+  });
+  assert.match(prodSeq, skuRegex);
+  assert.ok(prodSeq.startsWith('QMP-'));
+  assert.ok(!existingSkus.includes(prodSeq));
+
+  // Random product SKU avoids currentSku so repeated clicks always produce a fresh code
+  const prodRand = generateAutoSku({
+    kind: 'product',
+    existingSkus,
+    currentSku: prodSeq,
+    mode: 'random',
+    rng: () => 0.42,
+  });
+  assert.match(prodRand, skuRegex);
+  assert.notEqual(prodRand, prodSeq);
+  assert.ok(!existingSkus.includes(prodRand));
+
+  // Preserves custom valid 3-letter prefix if typed by admin
+  const customPrefix = generateAutoSku({
+    kind: 'product',
+    existingSkus: ['LMP-101'],
+    preferredPrefix: 'lmp-101',
+    mode: 'sequential',
+  });
+  assert.equal(customPrefix, 'LMP-102');
+
+  // Kit SKU defaults to KIT-NNN
+  const kitSku1 = generateAutoSku({
+    kind: 'kit',
+    existingSkus,
+    mode: 'sequential',
+  });
+  assert.equal(kitSku1, 'KIT-101');
+  assert.match(kitSku1, skuRegex);
+
+  const kitSku2 = generateAutoSku({
+    kind: 'kit',
+    existingSkus: [...existingSkus, kitSku1],
+    currentSku: kitSku1,
+    mode: 'random',
+    rng: () => 0.25,
+  });
+  assert.match(kitSku2, skuRegex);
+  assert.ok(kitSku2.startsWith('KIT-'));
+  assert.notEqual(kitSku2, kitSku1);
+
+  // validateKitDraft rejects duplicate kit or product SKUs
+  const dupProductSkuRes = validateKitDraft(
+    {
+      title: 'Kit Teste',
+      sku: INITIAL_PRODUCTS[0].sku,
+      promoPrice: 59.9,
+      items: [{ productId: INITIAL_PRODUCTS[0].id, quantity: 1 }],
+    },
+    INITIAL_PRODUCTS,
+    INITIAL_KITS
+  );
+  assert.equal(dupProductSkuRes.valid, false);
+
+  const dupKitSkuRes = validateKitDraft(
+    {
+      title: 'Kit Teste 2',
+      sku: 'KIT-101',
+      promoPrice: 59.9,
+      items: [{ productId: INITIAL_PRODUCTS[0].id, quantity: 1 }],
+    },
+    INITIAL_PRODUCTS,
+    [{ ...INITIAL_KITS[0], sku: 'KIT-101' }]
+  );
+  assert.equal(dupKitSkuRes.valid, false);
+
+  // buildKitCartProduct uses explicit kit.sku when defined
+  const kitWithSku = { ...INITIAL_KITS[0], sku: 'KIT-250' };
+  const builtProduct = buildKitCartProduct(kitWithSku, INITIAL_PRODUCTS);
+  assert.equal(builtProduct.sku, 'KIT-250');
+});
+
 
 
 
