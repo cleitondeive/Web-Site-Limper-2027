@@ -26,11 +26,12 @@ import {
   formatCurrency,
   getDiscountPercentage,
   getEffectivePrice,
+  isCustomerLoggedIn,
 } from '../utils/commerce';
 import { LIMPER_LOGO_URL } from '../data/initialCatalog';
 import { ProductImageWithFallback } from './CategoryIcon';
 
-export type ActiveView = 'store' | 'orders' | 'admin';
+export type ActiveView = 'store' | 'orders' | 'account' | 'admin';
 
 interface HeaderProps {
   activeView: ActiveView;
@@ -43,7 +44,7 @@ interface HeaderProps {
   cartItemCount: number;
   cartSubtotal: number;
   isCartQuoteOnly?: boolean;
-  ordersCount: number;
+  ordersCount?: number;
   customerProfile: CustomerProfile;
   hideAllPrices?: boolean;
   onSearchChange: (q: string) => void;
@@ -53,7 +54,7 @@ interface HeaderProps {
   onToggleMegaMenu: () => void;
   onSelectOffers: () => void;
   onSelectOrders: () => void;
-  onSelectAdmin: () => void;
+  onSelectAdmin?: () => void;
   onOpenCart: () => void;
   onOpenAccountModal: () => void;
   onOpenCepModal: () => void;
@@ -80,7 +81,6 @@ export const Header: React.FC<HeaderProps> = ({
   cartItemCount,
   cartSubtotal,
   isCartQuoteOnly = false,
-  ordersCount,
   customerProfile,
   hideAllPrices,
   onSearchChange,
@@ -100,6 +100,7 @@ export const Header: React.FC<HeaderProps> = ({
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const isLoggedIn = isCustomerLoggedIn(customerProfile);
   const firstName = customerProfile.name
     ? customerProfile.name.trim().split(' ')[0]
     : '';
@@ -213,18 +214,6 @@ export const Header: React.FC<HeaderProps> = ({
               <FlaskConical className="w-3 h-3 text-[#FFBE00]" />
               <span>Calculadora de Diluição</span>
             </button>
-            <button
-              type="button"
-              onClick={onSelectAdmin}
-              className={`font-extrabold px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                activeView === 'admin'
-                  ? 'bg-[#FFBE00] text-zinc-950'
-                  : 'bg-white/10 text-[#FFBE00] hover:bg-[#FFBE00] hover:text-zinc-950'
-              }`}
-            >
-              <span className="sm:hidden">ADM</span>
-              <span className="hidden sm:inline">App Lojista / ADM</span>
-            </button>
           </div>
         </div>
       </div>
@@ -276,44 +265,55 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </button>
 
-          {/* 2b. Boas-vindas! Entrar ou cadastrar (Compact icon on mobile, full label on sm+) */}
+          {/* 2b. Perfil / Entrar ou cadastrar (Clean Drogasil-style outline icon + 2-line label) */}
           <button
             type="button"
             onClick={onOpenAccountModal}
-            aria-label={firstName ? `Conta de ${firstName}` : 'Entrar ou cadastrar'}
-            className="flex items-center gap-2 text-left group cursor-pointer"
+            aria-label={
+              isLoggedIn && firstName
+                ? `Perfil de ${firstName}`
+                : 'Entrar ou cadastrar'
+            }
+            className={`flex items-center justify-center sm:justify-start gap-2 text-left group cursor-pointer min-w-[40px] min-h-[40px] sm:px-2 sm:py-1 rounded-xl transition-colors ${
+              activeView === 'account'
+                ? 'bg-rose-50/80 text-[#BA1826]'
+                : 'hover:bg-rose-50/60'
+            }`}
           >
-            <div className="w-9 h-9 rounded-xl bg-rose-50 border border-rose-200/80 flex items-center justify-center group-hover:bg-[#E3262E] group-hover:text-white text-[#E3262E] transition-colors">
-              <User className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 stroke-[2]" />
-            </div>
-            <div className="hidden sm:block text-xs leading-tight">
-              <span className="block text-zinc-500">
-                {firstName ? `Olá, ${firstName}!` : 'Boas-vindas!'}
+            <User
+              className={`w-6 h-6 shrink-0 stroke-[1.75] transition-colors ${
+                activeView === 'account'
+                  ? 'text-[#BA1826]'
+                  : 'text-[#BA1826] group-hover:text-[#9E1420]'
+              }`}
+            />
+            <div className="hidden sm:block text-[13px] leading-tight">
+              <span className="block text-[11px] font-medium text-zinc-500">
+                {isLoggedIn && firstName ? 'Perfil' : 'Boas-vindas!'}
               </span>
-              <strong className="block font-extrabold text-zinc-900 group-hover:text-[#E3262E]">
-                {firstName ? 'Minha conta & CEP' : 'Entrar ou cadastrar'}
+              <strong
+                className={`block font-extrabold group-hover:text-[#BA1826] transition-colors ${
+                  activeView === 'account' ? 'text-[#BA1826]' : 'text-zinc-900'
+                }`}
+              >
+                {isLoggedIn && firstName ? firstName : 'Entrar ou cadastrar'}
               </strong>
             </div>
           </button>
 
-          {/* 2c. Acompanhar pedidos (Compact icon on mobile, full label on lg+) */}
+          {/* 2c. Acompanhar pedidos (Clean outline package icon, zero numeric counter badge) */}
           <button
             type="button"
             onClick={onSelectOrders}
             aria-label="Acompanhar pedidos"
-            className="flex items-center gap-2 text-left group cursor-pointer"
+            className="flex items-center justify-center sm:justify-start gap-2 text-left group cursor-pointer min-w-[40px] min-h-[40px] sm:px-2 sm:py-1 rounded-xl hover:bg-rose-50/60 transition-colors"
           >
-            <div className="relative w-9 h-9 rounded-xl bg-rose-50 border border-rose-200/80 flex items-center justify-center group-hover:bg-[#E3262E] group-hover:text-white text-[#E3262E] transition-colors">
-              <Package className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 stroke-[2]" />
-              {ordersCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold flex items-center justify-center shadow-2xs">
-                  {ordersCount}
-                </span>
-              )}
-            </div>
-            <div className="hidden lg:block text-xs leading-tight">
-              <span className="block text-zinc-500">Acompanhar</span>
-              <strong className="block font-extrabold text-zinc-900 group-hover:text-[#E3262E]">
+            <Package className="w-6 h-6 shrink-0 text-[#BA1826] group-hover:text-[#9E1420] stroke-[1.75] transition-colors" />
+            <div className="hidden lg:block text-[13px] leading-tight">
+              <span className="block text-[11px] font-medium text-zinc-500">
+                Acompanhar
+              </span>
+              <strong className="block font-extrabold text-zinc-900 group-hover:text-[#BA1826] transition-colors">
                 pedidos
               </strong>
             </div>

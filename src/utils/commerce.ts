@@ -1,6 +1,13 @@
 import {
+  AdminAppTab,
+  AdminRoleLevel,
+  AdminUser,
   CartItem,
   CatalogSortOption,
+  CustomerAddress,
+  CustomerPrivacyPrefs,
+  CustomerProfile,
+  CustomerSegment,
   DeliveryCityOption,
   DeliveryType,
   LogisticsDeliveryMode,
@@ -11,9 +18,25 @@ import {
   Product,
   PromoCoupon,
   PromoKit,
+  SecurityAuditEvent,
+  SecurityEventCategory,
+  SecurityEventOutcome,
+  SecurityLogDatePreset,
+  SiteBackupPayload,
+  SiteBackupSnapshot,
+  SiteBackupTrigger,
+  CreateSecurityAuditEventInput,
+  CustomerIsolationAuditReport,
+  CustomerIsolationScopeCheck,
   StoreSettings,
   VolumeFilterOption,
 } from '../types/commerce';
+import {
+  DocumentKind,
+  formatCep,
+  isValidDocument,
+  onlyDigits,
+} from './brInputMasks';
 
 export function formatCurrency(value: number): string {
   const safe = Number.isFinite(value) ? value : 0;
@@ -533,7 +556,8 @@ export function evaluateLogisticsEligibility(params: {
 
 export function formatLogisticsModeLabel(
   mode?: LogisticsDeliveryMode,
-  interiorCityName?: string
+  interiorCityName?: string,
+  deliveryType?: DeliveryType
 ): string {
   if (mode === 'moto_limper') {
     return 'Moto Limper (Pequenos itens que cabem na moto)';
@@ -543,6 +567,12 @@ export function formatLogisticsModeLabel(
   }
   if (mode === 'interior_mt') {
     return `Interior de MT (${interiorCityName?.trim() || 'Consultar frete via WhatsApp'})`;
+  }
+  if (mode === 'pickup' || deliveryType === 'pickup') {
+    return 'Retirada no Balcão (Av. Couto Magalhães, 2820)';
+  }
+  if (deliveryType === 'delivery') {
+    return 'Entrega Delivery Limper MT';
   }
   return 'Retirada no Balcão (Av. Couto Magalhães, 2820)';
 }
@@ -737,7 +767,10 @@ export function filterOrdersByPhone(orders: Order[], phoneQuery: string): Order[
 export interface CheckoutValidationInput {
   customerName: string;
   customerPhone: string;
+  customerDocument?: string;
+  customerDocumentType?: DocumentKind;
   deliveryType: DeliveryType;
+  cep?: string;
   city?: DeliveryCityOption;
   interiorCityName?: string;
   street: string;
@@ -756,7 +789,18 @@ export function validateCheckoutInput(input: CheckoutValidationInput): string | 
   if (phoneDigits.length < 10) {
     return 'Informe um número de WhatsApp válido com DDD (ex: 65 99999-9999).';
   }
+  if (input.customerDocument && onlyDigits(input.customerDocument).length > 0) {
+    const docType: DocumentKind = input.customerDocumentType || 'cpf';
+    if (!isValidDocument(input.customerDocument, docType)) {
+      return docType === 'cnpj'
+        ? 'O CNPJ informado está incompleto ou inválido (verifique os 14 dígitos).'
+        : 'O CPF informado está incompleto ou inválido (verifique os 11 dígitos).';
+    }
+  }
   if (input.deliveryType === 'delivery') {
+    if (input.cep && onlyDigits(input.cep).length > 0 && onlyDigits(input.cep).length < 8) {
+      return 'Informe os 8 dígitos do CEP (ex: 78110-400) ou deixe em branco.';
+    }
     if (input.city === 'Interior de MT' && (!input.interiorCityName || input.interiorCityName.trim().length < 2)) {
       return 'Informe o nome da sua cidade em Mato Grosso para consulta de entrega via WhatsApp.';
     }
@@ -811,6 +855,16 @@ export function buildWhatsAppOrderMessage(order: Order, storeAddress?: string): 
     `*Pedido ${order.id}*${formattedDate ? ` · ${formattedDate}` : ''}`,
     divider,
     `CLIENTE: ${order.customerName}`,
+    ...(order.customerDocument && order.customerDocument.trim()
+      ? [
+          `${
+            order.customerDocumentType === 'cnpj' ||
+            onlyDigits(order.customerDocument).length > 11
+              ? 'CNPJ'
+              : 'CPF'
+          }: ${order.customerDocument.trim()}`,
+        ]
+      : []),
     `WHATSAPP: ${formatPhone(order.customerPhone)}`,
     `TIPO: ${
       order.deliveryType === 'delivery'
@@ -827,12 +881,13 @@ export function buildWhatsAppOrderMessage(order: Order, storeAddress?: string): 
 
   if (order.deliveryType === 'delivery' && order.address) {
     const refPart = order.address.reference ? ` (${order.address.reference})` : '';
+    const cepPart = order.address.cep ? ` · CEP ${formatCep(order.address.cep)}` : '';
     const cityDisplay =
       order.address.city === 'Interior de MT'
         ? `${order.address.interiorCityName || 'Interior'} - MT`
         : `${order.address.city}/MT`;
     lines.push(
-      `ENDEREÇO: ${order.address.street}, ${order.address.number} - ${order.address.neighborhood} (${cityDisplay})${refPart}`
+      `ENDEREÇO: ${order.address.street}, ${order.address.number} - ${order.address.neighborhood} (${cityDisplay})${cepPart}${refPart}`
     );
   } else if (storeAddress) {
     lines.push(`LOCAL RETIRADA: ${storeAddress}`);
@@ -1234,13 +1289,49 @@ export function transitionOrderStatus(
   };
 }
 
-export function toDateKeyYmd(isoOrDate: string | Date): string {
+export function toDateKeyYmd(
+  isoOrDate: string | Date,
+  useLocal: boolean = false
+): string {
   const d = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate;
   if (Number.isNaN(d.getTime())) return '';
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const yyyy = useLocal ? d.getFullYear() : d.getUTCFullYear();
+  const mm = String((useLocal ? d.getMonth() : d.getUTCMonth()) + 1).padStart(2, '0');
+  const dd = String(useLocal ? d.getDate() : d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+export function formatBrDateFromYmd(ymd: string): string {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return '';
+  const [yyyy, mm, dd] = ymd.split('-');
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+export function getKanbanPeriodLabel(
+  preset: OrderDatePreset,
+  options?: {
+    startDate?: string;
+    endDate?: string;
+    todayYmd?: string;
+  }
+): string {
+  const todayStr = options?.todayYmd ? formatBrDateFromYmd(options.todayYmd) : '';
+  if (preset === 'today') {
+    return todayStr ? `Hoje (${todayStr})` : 'Hoje';
+  }
+  if (preset === 'yesterday') return 'Ontem';
+  if (preset === 'last_7_days') return 'Últimos 7 Dias';
+  if (preset === 'last_30_days') return 'Últimos 30 Dias';
+  if (preset === 'custom') {
+    const startBr = options?.startDate ? formatBrDateFromYmd(options.startDate) : '';
+    const endBr = options?.endDate ? formatBrDateFromYmd(options.endDate) : '';
+    if (startBr && endBr && startBr === endBr) return startBr;
+    if (startBr && endBr) return `${startBr} a ${endBr}`;
+    if (startBr) return `A partir de ${startBr}`;
+    if (endBr) return `Até ${endBr}`;
+    return 'Data Específica';
+  }
+  return 'Todas as Datas';
 }
 
 export function filterOrdersByCriteria(
@@ -1253,22 +1344,24 @@ export function filterOrdersByCriteria(
     deliveryType?: 'all' | DeliveryType;
     statusFilter?: 'all' | 'active' | OrderStatus;
     referenceNow?: Date;
+    useLocalDate?: boolean;
   }
 ): Order[] {
   const rawQuery = (criteria.searchQuery || '').trim().toLowerCase();
   const phoneDigits = normalizePhone(rawQuery);
   const preset = criteria.datePreset || 'all';
+  const useLocal = Boolean(criteria.useLocalDate);
   const refNow = criteria.referenceNow || new Date();
-  const todayYmd = toDateKeyYmd(refNow);
+  const todayYmd = toDateKeyYmd(refNow, useLocal);
 
   const yesterdayDate = new Date(refNow.getTime() - 24 * 60 * 60 * 1000);
-  const yesterdayYmd = toDateKeyYmd(yesterdayDate);
+  const yesterdayYmd = toDateKeyYmd(yesterdayDate, useLocal);
 
   const last7Cutoff = new Date(refNow.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const last7Ymd = toDateKeyYmd(last7Cutoff);
+  const last7Ymd = toDateKeyYmd(last7Cutoff, useLocal);
 
   const last30Cutoff = new Date(refNow.getTime() - 30 * 24 * 60 * 60 * 1000);
-  const last30Ymd = toDateKeyYmd(last30Cutoff);
+  const last30Ymd = toDateKeyYmd(last30Cutoff, useLocal);
 
   return orders.filter((order) => {
     // 1. Modality filter
@@ -1306,7 +1399,7 @@ export function filterOrdersByCriteria(
     }
 
     // 4. Date / Period filter
-    const orderYmd = toDateKeyYmd(order.createdAt);
+    const orderYmd = toDateKeyYmd(order.createdAt, useLocal);
     if (!orderYmd) return true;
 
     if (preset === 'today') {
@@ -1363,4 +1456,1635 @@ export function summarizeOrdersPeriod(orders: Order[]): {
     averageTicket,
   };
 }
+
+export const DEFAULT_CUSTOMER_PRIVACY: CustomerPrivacyPrefs = {
+  offersOptIn: true,
+  whatsappOptIn: true,
+  emailOptIn: true,
+  phoneOptIn: false,
+  restockRemindersOptIn: true,
+};
+
+export const CUSTOMER_SEGMENT_LABELS: Record<CustomerSegment, string> = {
+  residencial: 'Residencial / Casa',
+  condominio: 'Condomínio',
+  clinica: 'Clínica / Consultório',
+  lavajato: 'Lava-Jato / Automotivo',
+  empresa: 'Empresa / Comércio',
+};
+
+export function getCustomerAddresses(profile: CustomerProfile): CustomerAddress[] {
+  const existing = Array.isArray(profile.addresses) ? profile.addresses : [];
+  if (existing.length > 0) {
+    const hasDefault = existing.some((a) => a.isDefault);
+    return existing.map((addr, idx) => ({
+      ...addr,
+      cep: formatCep(addr.cep || ''),
+      isDefault: hasDefault ? Boolean(addr.isDefault) : idx === 0,
+    }));
+  }
+
+  if (profile.street?.trim() || profile.cep?.trim()) {
+    return [
+      {
+        id: 'addr-primary',
+        label: 'Principal',
+        cep: formatCep(profile.cep || '78110-400'),
+        street: profile.street || 'Av. Couto Magalhães',
+        number: profile.number || '',
+        neighborhood: profile.neighborhood || 'Centro Norte',
+        city: profile.city || 'Várzea Grande',
+        interiorCityName: profile.interiorCityName || '',
+        reference: profile.reference || '',
+        isDefault: true,
+      },
+    ];
+  }
+
+  return [];
+}
+
+export function syncProfilePrimaryAddress(
+  profile: CustomerProfile,
+  addresses: CustomerAddress[]
+): CustomerProfile {
+  if (addresses.length === 0) {
+    return {
+      ...profile,
+      addresses: [],
+    };
+  }
+
+  const defaultAddr = addresses.find((a) => a.isDefault) || addresses[0];
+  const normalizedAddresses = addresses.map((a) => ({
+    ...a,
+    cep: formatCep(a.cep || ''),
+    isDefault: a.id === defaultAddr.id,
+  }));
+
+  return {
+    ...profile,
+    cep: defaultAddr.cep,
+    street: defaultAddr.street,
+    number: defaultAddr.number,
+    neighborhood: defaultAddr.neighborhood,
+    city: defaultAddr.city,
+    interiorCityName:
+      defaultAddr.city === 'Interior de MT'
+        ? defaultAddr.interiorCityName || ''
+        : '',
+    reference: defaultAddr.reference || '',
+    addresses: normalizedAddresses,
+  };
+}
+
+export function upsertCustomerAddress(
+  profile: CustomerProfile,
+  input: Omit<CustomerAddress, 'id'> & { id?: string }
+): CustomerProfile {
+  const current = getCustomerAddresses(profile);
+  const nextId =
+    input.id || `addr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const normalizedInput: CustomerAddress = {
+    ...input,
+    id: nextId,
+    label: (input.label || 'Endereço').trim(),
+    cep: formatCep(input.cep || ''),
+    street: input.street.trim(),
+    number: input.number.trim(),
+    neighborhood: input.neighborhood.trim(),
+    interiorCityName:
+      input.city === 'Interior de MT' ? (input.interiorCityName || '').trim() : '',
+    reference: (input.reference || '').trim(),
+  };
+
+  const exists = current.some((a) => a.id === nextId);
+  let nextList: CustomerAddress[];
+  if (exists) {
+    nextList = current.map((a) => (a.id === nextId ? normalizedInput : a));
+  } else {
+    nextList = [...current, normalizedInput];
+  }
+
+  if (normalizedInput.isDefault || current.length === 0) {
+    nextList = nextList.map((a) => ({
+      ...a,
+      isDefault: a.id === nextId,
+    }));
+  }
+
+  return syncProfilePrimaryAddress(profile, nextList);
+}
+
+export function setDefaultCustomerAddress(
+  profile: CustomerProfile,
+  addressId: string
+): CustomerProfile {
+  const current = getCustomerAddresses(profile);
+  if (!current.some((a) => a.id === addressId)) return profile;
+  const nextList = current.map((a) => ({
+    ...a,
+    isDefault: a.id === addressId,
+  }));
+  return syncProfilePrimaryAddress(profile, nextList);
+}
+
+export function deleteCustomerAddress(
+  profile: CustomerProfile,
+  addressId: string
+): CustomerProfile {
+  const current = getCustomerAddresses(profile);
+  const nextList = current.filter((a) => a.id !== addressId);
+  return syncProfilePrimaryAddress(profile, nextList);
+}
+
+export function canonicalBrazilPhone(phone?: string): string {
+  const digits = normalizePhone(phone || '');
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
+    return digits.slice(2);
+  }
+  return digits;
+}
+
+export function matchCustomerPhoneExact(phoneA?: string, phoneB?: string): boolean {
+  const a = canonicalBrazilPhone(phoneA);
+  const b = canonicalBrazilPhone(phoneB);
+  return a.length >= 10 && b.length >= 10 && a === b;
+}
+
+export function normalizeOrderCode(code: string): string {
+  return (code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+export function matchesOrderCodeExact(orderId: string, query: string): boolean {
+  const normOrder = normalizeOrderCode(orderId);
+  const normQuery = normalizeOrderCode(query);
+  if (!normOrder || !normQuery) return false;
+  if (normOrder === normQuery) return true;
+  // Allow numeric suffix lookup (e.g. "1042" matching "#LMP-1042") only for 4+ digits
+  if (/^\d{4,}$/.test(normQuery) && `LMP${normQuery}` === normOrder) {
+    return true;
+  }
+  return false;
+}
+
+export function findOrderForPrivateLookup(
+  orders: Order[],
+  orderCodeQuery: string,
+  phoneQuery: string
+): Order | null {
+  const cleanCode = normalizeOrderCode(orderCodeQuery);
+  const cleanPhone = canonicalBrazilPhone(phoneQuery);
+  if (cleanCode.length < 4 || cleanPhone.length < 10) return null;
+
+  const matched = orders.find(
+    (o) =>
+      matchesOrderCodeExact(o.id, cleanCode) &&
+      matchCustomerPhoneExact(o.customerPhone, cleanPhone)
+  );
+  return matched || null;
+}
+
+export function maskPhoneForPrivacy(phone?: string): string {
+  const digits = canonicalBrazilPhone(phone);
+  if (digits.length < 10) return '•••';
+  return `(${digits.slice(0, 2)}) •••••-${digits.slice(-4)}`;
+}
+
+export function getOrdersForCustomer(
+  orders: Order[],
+  customerPhone?: string
+): Order[] {
+  const matched = orders.filter((o) =>
+    matchCustomerPhoneExact(o.customerPhone, customerPhone)
+  );
+
+  return [...matched].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+export interface CustomerOrderScopeParams {
+  orders: Order[];
+  customerProfile?: Pick<
+    CustomerProfile,
+    'isRegistered' | 'name' | 'phone'
+  > | null;
+  sessionOrderIds?: string[];
+  verifiedLookup?: { orderId: string; phone: string } | null;
+}
+
+export function resolveCustomerVisibleOrders({
+  orders,
+  customerProfile,
+  sessionOrderIds = [],
+  verifiedLookup = null,
+}: CustomerOrderScopeParams): Order[] {
+  const sessionSet = new Set(sessionOrderIds);
+  const loggedIn = isCustomerLoggedIn(customerProfile);
+
+  const scoped = orders.filter((order) => {
+    if (sessionSet.has(order.id)) return true;
+    if (loggedIn && customerProfile?.phone) {
+      return matchCustomerPhoneExact(order.customerPhone, customerProfile.phone);
+    }
+    if (!loggedIn && verifiedLookup) {
+      return (
+        order.id === verifiedLookup.orderId &&
+        matchCustomerPhoneExact(order.customerPhone, verifiedLookup.phone)
+      );
+    }
+    return false;
+  });
+
+  return [...scoped].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+export function isCustomerLoggedIn(
+  customerProfile?: Pick<CustomerProfile, 'isRegistered' | 'name' | 'phone'> | null
+): boolean {
+  if (!customerProfile?.isRegistered) return false;
+  return (
+    customerProfile.name.trim().length > 0 ||
+    normalizePhone(customerProfile.phone).length >= 8
+  );
+}
+
+export function getCustomerOrderCardStatusLabel(
+  order: Pick<Order, 'status' | 'deliveryType'>
+): string {
+  if (order.status === 'completed') {
+    return order.deliveryType === 'pickup' ? 'Pedido retirado' : 'Pedido entregue';
+  }
+  if (order.status === 'ready_or_out') {
+    return order.deliveryType === 'pickup'
+      ? 'Pronto para retirada'
+      : 'Saiu para entrega';
+  }
+  if (order.status === 'separating') {
+    return 'Separando galões';
+  }
+  return order.deliveryType === 'pickup'
+    ? 'Recebido no balcão'
+    : 'Pedido confirmado';
+}
+
+export function getCustomerLatestActiveOrder(
+  orders: Order[],
+  customerProfile?: Pick<CustomerProfile, 'isRegistered' | 'phone'> | null
+): Order | undefined {
+  if (!customerProfile?.isRegistered) return undefined;
+  const customerOrders = getOrdersForCustomer(orders, customerProfile.phone);
+  return customerOrders.find((o) => o.status !== 'completed');
+}
+
+export interface FrequentlyBoughtProduct {
+  product: Product;
+  orderCount: number;
+  totalUnits: number;
+  lastOrderedAt: string;
+}
+
+export function deriveFrequentlyBoughtProducts(
+  orders: Order[],
+  catalogProducts: Product[],
+  customerPhone?: string
+): FrequentlyBoughtProduct[] {
+  const customerOrders = getOrdersForCustomer(orders, customerPhone);
+  if (customerOrders.length === 0) return [];
+
+  const statsMap = new Map<
+    string,
+    { orderCount: number; totalUnits: number; lastOrderedAt: string }
+  >();
+
+  for (const order of customerOrders) {
+    const seenInOrder = new Set<string>();
+    for (const item of order.items) {
+      const targetIds =
+        item.kitItems && item.kitItems.length > 0
+          ? item.kitItems.map((k) => ({
+              id: k.productId,
+              qty: k.quantity * item.quantity,
+            }))
+          : [{ id: item.productId, qty: item.quantity }];
+
+      for (const entry of targetIds) {
+        const existing = statsMap.get(entry.id) || {
+          orderCount: 0,
+          totalUnits: 0,
+          lastOrderedAt: order.createdAt,
+        };
+        if (!seenInOrder.has(entry.id)) {
+          existing.orderCount += 1;
+          seenInOrder.add(entry.id);
+        }
+        existing.totalUnits += entry.qty;
+        if (
+          new Date(order.createdAt).getTime() >
+          new Date(existing.lastOrderedAt).getTime()
+        ) {
+          existing.lastOrderedAt = order.createdAt;
+        }
+        statsMap.set(entry.id, existing);
+      }
+    }
+  }
+
+  const results: FrequentlyBoughtProduct[] = [];
+  for (const [productId, stat] of statsMap.entries()) {
+    const product = catalogProducts.find(
+      (p) => p.id === productId && p.status !== 'inactive'
+    );
+    if (product) {
+      results.push({
+        product,
+        orderCount: stat.orderCount,
+        totalUnits: stat.totalUnits,
+        lastOrderedAt: stat.lastOrderedAt,
+      });
+    }
+  }
+
+  return results.sort((a, b) => {
+    if (b.orderCount !== a.orderCount) return b.orderCount - a.orderCount;
+    return b.totalUnits - a.totalUnits;
+  });
+}
+
+export const ADMIN_PRODUCTS_PAGE_SIZE = 30;
+
+export function formatPageNumberLabel(pageNumber: number): string {
+  return String(Math.max(1, Math.floor(pageNumber))).padStart(2, '0');
+}
+
+export interface PaginatedResult<T> {
+  pageItems: T[];
+  safePage: number;
+  totalPages: number;
+  startIndex: number;
+  endIndex: number;
+  totalItems: number;
+  pageSize: number;
+}
+
+export function paginateItems<T>(
+  items: T[],
+  requestedPage: number,
+  pageSize: number = ADMIN_PRODUCTS_PAGE_SIZE
+): PaginatedResult<T> {
+  const safeSize = Math.max(1, Math.floor(pageSize));
+  const totalItems = items.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / safeSize));
+  const safePage = Math.min(
+    totalPages,
+    Math.max(1, Math.floor(Number.isFinite(requestedPage) ? requestedPage : 1))
+  );
+
+  if (totalItems === 0) {
+    return {
+      pageItems: [],
+      safePage: 1,
+      totalPages: 1,
+      startIndex: 0,
+      endIndex: 0,
+      totalItems: 0,
+      pageSize: safeSize,
+    };
+  }
+
+  const sliceStart = (safePage - 1) * safeSize;
+  const sliceEnd = Math.min(totalItems, sliceStart + safeSize);
+
+  return {
+    pageItems: items.slice(sliceStart, sliceEnd),
+    safePage,
+    totalPages,
+    startIndex: sliceStart + 1,
+    endIndex: sliceEnd,
+    totalItems,
+    pageSize: safeSize,
+  };
+}
+
+function buildUniqueDuplicateSku(sourceSku: string, existingProducts: Product[]): string {
+  const usedSkus = new Set(existingProducts.map((p) => p.sku.trim().toUpperCase()));
+  const baseSku =
+    sourceSku.trim().replace(/-COPIA(?:-\d+)?$/i, '') || 'QMP';
+  const primaryCandidate = `${baseSku}-COPIA`;
+  if (!usedSkus.has(primaryCandidate.toUpperCase())) {
+    return primaryCandidate;
+  }
+  let counter = 2;
+  while (usedSkus.has(`${baseSku}-COPIA-${counter}`.toUpperCase())) {
+    counter += 1;
+  }
+  return `${baseSku}-COPIA-${counter}`;
+}
+
+function buildUniqueDuplicateTitle(sourceTitle: string, existingProducts: Product[]): string {
+  const usedTitles = new Set(existingProducts.map((p) => p.title.trim().toLowerCase()));
+  const baseTitle =
+    sourceTitle.trim().replace(/\s+\(Cópia(?:\s+\d+)?\)$/i, '') || 'Produto';
+  const firstCandidate = `${baseTitle} (Cópia)`;
+  if (!usedTitles.has(firstCandidate.toLowerCase())) {
+    return firstCandidate;
+  }
+  let counter = 2;
+  while (usedTitles.has(`${baseTitle} (Cópia ${counter})`.toLowerCase())) {
+    counter += 1;
+  }
+  return `${baseTitle} (Cópia ${counter})`;
+}
+
+export function duplicateProductItem(
+  products: Product[],
+  sourceId: string,
+  nowMs: number = Date.now()
+): { nextProducts: Product[]; duplicatedProduct: Product | null; insertedIndex: number } {
+  const sourceIndex = products.findIndex((p) => p.id === sourceId);
+  if (sourceIndex === -1) {
+    return { nextProducts: products, duplicatedProduct: null, insertedIndex: -1 };
+  }
+
+  const source = products[sourceIndex];
+  const existingIds = new Set(products.map((p) => p.id));
+  let suffix = 0;
+  let uniqueId = `prod-dup-${nowMs}`;
+  while (existingIds.has(uniqueId)) {
+    suffix += 1;
+    uniqueId = `prod-dup-${nowMs}-${suffix}`;
+  }
+
+  const duplicatedProduct: Product = {
+    ...source,
+    id: uniqueId,
+    sku: buildUniqueDuplicateSku(source.sku, products),
+    title: buildUniqueDuplicateTitle(source.title, products),
+    kitItems: source.kitItems ? source.kitItems.map((item) => ({ ...item })) : undefined,
+  };
+
+  const nextProducts = [
+    ...products.slice(0, sourceIndex + 1),
+    duplicatedProduct,
+    ...products.slice(sourceIndex + 1),
+  ];
+
+  return {
+    nextProducts,
+    duplicatedProduct,
+    insertedIndex: sourceIndex + 1,
+  };
+}
+
+export function duplicateMultipleProducts(
+  products: Product[],
+  sourceIds: string[],
+  nowMs: number = Date.now()
+): { nextProducts: Product[]; duplicatedProducts: Product[] } {
+  const idSet = new Set(sourceIds);
+  if (idSet.size === 0) {
+    return { nextProducts: products, duplicatedProducts: [] };
+  }
+
+  let working = [...products];
+  const duplicatedProducts: Product[] = [];
+  let tick = 0;
+
+  for (const original of products) {
+    if (!idSet.has(original.id)) continue;
+    const res = duplicateProductItem(working, original.id, nowMs + tick);
+    tick += 1;
+    if (res.duplicatedProduct) {
+      working = res.nextProducts;
+      duplicatedProducts.push(res.duplicatedProduct);
+    }
+  }
+
+  return { nextProducts: working, duplicatedProducts };
+}
+
+export function reorderProductsById(
+  products: Product[],
+  draggedId: string,
+  targetId: string,
+  position: 'before' | 'after' = 'before'
+): Product[] {
+  if (!draggedId || !targetId || draggedId === targetId) return products;
+  const fromIndex = products.findIndex((p) => p.id === draggedId);
+  if (fromIndex === -1) return products;
+  if (!products.some((p) => p.id === targetId)) return products;
+
+  const draggedItem = products[fromIndex];
+  const withoutDragged = [
+    ...products.slice(0, fromIndex),
+    ...products.slice(fromIndex + 1),
+  ];
+  const targetIndexInRemaining = withoutDragged.findIndex((p) => p.id === targetId);
+  if (targetIndexInRemaining === -1) return products;
+
+  const insertAt =
+    position === 'after' ? targetIndexInRemaining + 1 : targetIndexInRemaining;
+
+  return [
+    ...withoutDragged.slice(0, insertAt),
+    draggedItem,
+    ...withoutDragged.slice(insertAt),
+  ];
+}
+
+export function moveProductStep(
+  products: Product[],
+  productId: string,
+  direction: 'up' | 'down' | 'top' | 'bottom',
+  visibleSubsetIds?: string[]
+): Product[] {
+  const currentIdx = products.findIndex((p) => p.id === productId);
+  if (currentIdx === -1) return products;
+
+  if (direction === 'top') {
+    if (currentIdx === 0) return products;
+    const item = products[currentIdx];
+    return [item, ...products.slice(0, currentIdx), ...products.slice(currentIdx + 1)];
+  }
+
+  if (direction === 'bottom') {
+    if (currentIdx === products.length - 1) return products;
+    const item = products[currentIdx];
+    return [...products.slice(0, currentIdx), ...products.slice(currentIdx + 1), item];
+  }
+
+  if (visibleSubsetIds && visibleSubsetIds.length > 1) {
+    const visiblePos = visibleSubsetIds.indexOf(productId);
+    if (visiblePos !== -1) {
+      const neighborPos = direction === 'up' ? visiblePos - 1 : visiblePos + 1;
+      if (neighborPos < 0 || neighborPos >= visibleSubsetIds.length) {
+        return products;
+      }
+      const neighborId = visibleSubsetIds[neighborPos];
+      return reorderProductsById(
+        products,
+        productId,
+        neighborId,
+        direction === 'up' ? 'before' : 'after'
+      );
+    }
+  }
+
+  const targetIdx = direction === 'up' ? currentIdx - 1 : currentIdx + 1;
+  if (targetIdx < 0 || targetIdx >= products.length) {
+    return products;
+  }
+
+  const next = [...products];
+  const [moved] = next.splice(currentIdx, 1);
+  next.splice(targetIdx, 0, moved);
+  return next;
+}
+
+export const MAX_SECURITY_AUDIT_LOGS = 200;
+
+export const SECURITY_CATEGORY_LABELS: Record<SecurityEventCategory, string> = {
+  tracking_access: 'Rastreio de Pedido',
+  customer_auth: 'Conta & Sessão Cliente',
+  admin_auth: 'Acesso Administrativo',
+  order_security: 'Custódia de Pedidos',
+  catalog_policy: 'Política de Catálogo',
+  user_management: 'Usuários & Permissões',
+  site_backup: 'Backup & Restauração',
+};
+
+export const SECURITY_OUTCOME_META: Record<
+  SecurityEventOutcome,
+  { label: string }
+> = {
+  allowed: { label: 'Autorizado' },
+  blocked: { label: 'Bloqueado' },
+  info: { label: 'Registro' },
+};
+
+export function sanitizeTargetForAuditLog(rawTarget?: string): string {
+  const cleaned = (rawTarget || '').trim();
+  if (!cleaned) return 'Sessão não identificada';
+  const digits = normalizePhone(cleaned);
+  const looksLikePhone =
+    digits.length >= 10 && /^[+\d()\s.-]+$/.test(cleaned);
+  if (looksLikePhone) {
+    return maskPhoneForPrivacy(digits);
+  }
+  return cleaned.slice(0, 60);
+}
+
+export function createSecurityAuditEvent(
+  input: CreateSecurityAuditEventInput,
+  nowMs: number = Date.now()
+): SecurityAuditEvent {
+  const timestamp = input.timestamp || new Date(nowMs).toISOString();
+  const suffix = Math.random().toString(36).slice(2, 6);
+  const cleanUsername = input.actorUsername
+    ? input.actorUsername.trim().toLowerCase().replace(/^@/, '').slice(0, 40)
+    : undefined;
+  return {
+    id: `sec-${nowMs}-${suffix}`,
+    timestamp,
+    category: input.category,
+    outcome: input.outcome,
+    actorLabel: (input.actorLabel || 'Sistema').trim().slice(0, 60),
+    actorUsername: cleanUsername || undefined,
+    actorRole: input.actorRole,
+    maskedTarget: sanitizeTargetForAuditLog(input.rawTarget),
+    orderId: input.orderId ? input.orderId.trim().slice(0, 32) : undefined,
+    summary: input.summary.trim(),
+    detail: input.detail.trim(),
+  };
+}
+
+export function appendSecurityAuditEvent(
+  events: SecurityAuditEvent[],
+  input: CreateSecurityAuditEventInput,
+  maxEntries: number = MAX_SECURITY_AUDIT_LOGS,
+  nowMs: number = Date.now()
+): SecurityAuditEvent[] {
+  const entry = createSecurityAuditEvent(input, nowMs);
+  const safeCap = Math.max(1, maxEntries);
+  return [entry, ...events].slice(0, safeCap);
+}
+
+export function filterSecurityAuditEvents(
+  events: SecurityAuditEvent[],
+  filters: {
+    searchQuery?: string;
+    category?: 'all' | SecurityEventCategory;
+    outcome?: 'all' | SecurityEventOutcome;
+    actorUsername?: string;
+    datePreset?: SecurityLogDatePreset;
+    specificDate?: string; // YYYY-MM-DD
+    referenceNow?: Date;
+  }
+): SecurityAuditEvent[] {
+  const q = (filters.searchQuery || '').trim().toLowerCase();
+  const category = filters.category || 'all';
+  const outcome = filters.outcome || 'all';
+  const actorFilter = (filters.actorUsername || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@/, '');
+  const specificDate = (filters.specificDate || '').trim();
+  const datePreset: SecurityLogDatePreset =
+    specificDate && (!filters.datePreset || filters.datePreset === 'specific')
+      ? 'specific'
+      : filters.datePreset || 'all';
+
+  const refNow = filters.referenceNow || new Date();
+  const todayKey = toDateKeyYmd(refNow, true);
+  const yesterdayDate = new Date(refNow.getTime());
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterdayKey = toDateKeyYmd(yesterdayDate, true);
+  const sevenDaysAgo = new Date(refNow.getTime());
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  const sevenDaysKey = toDateKeyYmd(sevenDaysAgo, true);
+
+  return events.filter((ev) => {
+    if (category !== 'all' && ev.category !== category) return false;
+    if (outcome !== 'all' && ev.outcome !== outcome) return false;
+
+    if (datePreset !== 'all') {
+      const evDate = new Date(ev.timestamp);
+      if (Number.isNaN(evDate.getTime())) return false;
+      const evKey = toDateKeyYmd(evDate, true);
+      if (datePreset === 'today' && evKey !== todayKey) return false;
+      if (datePreset === 'yesterday' && evKey !== yesterdayKey) return false;
+      if (datePreset === 'last7' && (evKey < sevenDaysKey || evKey > todayKey)) {
+        return false;
+      }
+      if (datePreset === 'specific' && specificDate && evKey !== specificDate) {
+        return false;
+      }
+    }
+
+    if (actorFilter && actorFilter !== 'all') {
+      const evUser = (ev.actorUsername || '').toLowerCase();
+      const evActor = ev.actorLabel.toLowerCase();
+      const evTarget = ev.maskedTarget.toLowerCase();
+      const matchesActor =
+        evUser === actorFilter ||
+        evActor.includes(`@${actorFilter}`) ||
+        evActor === actorFilter ||
+        evTarget.includes(`@${actorFilter}`) ||
+        evTarget.includes(`usuário: ${actorFilter}`);
+      if (!matchesActor) return false;
+    }
+    if (!q) return true;
+    return (
+      ev.summary.toLowerCase().includes(q) ||
+      ev.detail.toLowerCase().includes(q) ||
+      ev.actorLabel.toLowerCase().includes(q) ||
+      (ev.actorUsername || '').toLowerCase().includes(q) ||
+      ev.maskedTarget.toLowerCase().includes(q) ||
+      (ev.orderId || '').toLowerCase().includes(q)
+    );
+  });
+}
+
+export interface SecurityLogDateSummary {
+  dateKey: string; // YYYY-MM-DD
+  label: string; // DD/MM/YYYY
+  count: number;
+}
+
+export function summarizeSecurityLogDates(
+  events: SecurityAuditEvent[],
+  maxDates: number = 10
+): SecurityLogDateSummary[] {
+  const counts = new Map<string, number>();
+  for (const ev of events) {
+    const dt = new Date(ev.timestamp);
+    if (Number.isNaN(dt.getTime())) continue;
+    const key = toDateKeyYmd(dt, true);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, maxDates)
+    .map(([dateKey, count]) => ({
+      dateKey,
+      label: formatBrDateFromYmd(dateKey),
+      count,
+    }));
+}
+
+export function auditCustomerTrackingIsolation(
+  orders: Order[],
+  context?: {
+    customerProfile?: Pick<
+      CustomerProfile,
+      'isRegistered' | 'name' | 'phone'
+    > | null;
+    sessionOrderIds?: string[];
+    verifiedLookup?: { orderId: string; phone: string } | null;
+  },
+  nowMs: number = Date.now()
+): CustomerIsolationAuditReport {
+  const guestUnverifiedVisible = resolveCustomerVisibleOrders({
+    orders,
+    customerProfile: null,
+    sessionOrderIds: [],
+    verifiedLookup: null,
+  });
+
+  const customerGroups = new Map<
+    string,
+    { customerName: string; rawPhone: string; orderIds: string[] }
+  >();
+  let ordersMissingPhoneCount = 0;
+
+  for (const order of orders) {
+    const canon = canonicalBrazilPhone(order.customerPhone);
+    if (canon.length < 10) {
+      ordersMissingPhoneCount += 1;
+      continue;
+    }
+    const existing = customerGroups.get(canon);
+    if (existing) {
+      existing.orderIds.push(order.id);
+    } else {
+      customerGroups.set(canon, {
+        customerName: order.customerName || 'Cliente',
+        rawPhone: order.customerPhone,
+        orderIds: [order.id],
+      });
+    }
+  }
+
+  const customerChecks: CustomerIsolationScopeCheck[] = [];
+  let totalCrossCustomerLeaks = 0;
+
+  for (const [canonPhone, group] of customerGroups.entries()) {
+    const simulatedVisible = resolveCustomerVisibleOrders({
+      orders,
+      customerProfile: {
+        isRegistered: true,
+        name: group.customerName,
+        phone: group.rawPhone,
+      },
+      sessionOrderIds: [],
+      verifiedLookup: null,
+    });
+
+    const expectedSet = new Set(group.orderIds);
+    const visibleIds = simulatedVisible.map((o) => o.id);
+    const crossLeaks = visibleIds.filter((id) => !expectedSet.has(id)).length;
+    const missingOwn = group.orderIds.filter((id) => !visibleIds.includes(id)).length;
+    totalCrossCustomerLeaks += crossLeaks;
+
+    customerChecks.push({
+      customerKey: canonPhone,
+      customerName: group.customerName,
+      maskedPhone: maskPhoneForPrivacy(group.rawPhone),
+      expectedOrderIds: group.orderIds,
+      visibleOrderIds: visibleIds,
+      crossCustomerLeakCount: crossLeaks,
+      isolated: crossLeaks === 0 && missingOwn === 0,
+    });
+  }
+
+  const activeVisible = resolveCustomerVisibleOrders({
+    orders,
+    customerProfile: context?.customerProfile || null,
+    sessionOrderIds: context?.sessionOrderIds || [],
+    verifiedLookup: context?.verifiedLookup || null,
+  });
+
+  let activeSessionMode: CustomerIsolationAuditReport['activeSessionMode'] =
+    'anonymous_locked';
+  let activeSessionLabel = 'Visitante não autenticado (0 pedidos expostos)';
+
+  if (isCustomerLoggedIn(context?.customerProfile)) {
+    activeSessionMode = 'logged_in_customer';
+    activeSessionLabel = `${context?.customerProfile?.name || 'Cliente'} (${maskPhoneForPrivacy(
+      context?.customerProfile?.phone
+    )})`;
+  } else if (context?.verifiedLookup) {
+    activeSessionMode = 'verified_guest';
+    activeSessionLabel = `Consulta privada (${context.verifiedLookup.orderId} · ${maskPhoneForPrivacy(
+      context.verifiedLookup.phone
+    )})`;
+  } else if ((context?.sessionOrderIds?.length || 0) > 0) {
+    activeSessionMode = 'session_checkout';
+    activeSessionLabel = `Sessão de compra recente (${context?.sessionOrderIds?.length} pedido(s))`;
+  }
+
+  const isFullyIsolated =
+    guestUnverifiedVisible.length === 0 &&
+    totalCrossCustomerLeaks === 0 &&
+    ordersMissingPhoneCount === 0 &&
+    customerChecks.every((c) => c.isolated);
+
+  return {
+    checkedAt: new Date(nowMs).toISOString(),
+    totalOrdersCount: orders.length,
+    distinctCustomersCount: customerGroups.size,
+    guestUnverifiedVisibleCount: guestUnverifiedVisible.length,
+    ordersMissingPhoneCount,
+    totalCrossCustomerLeaks,
+    isFullyIsolated,
+    activeSessionMode,
+    activeSessionLabel,
+    activeSessionVisibleOrderIds: activeVisible.map((o) => o.id),
+    customerChecks,
+  };
+}
+
+export function buildSecurityAuditCsv(events: SecurityAuditEvent[]): string {
+  const headers = [
+    'Data_Hora',
+    'Categoria',
+    'Resultado',
+    'Ator',
+    'Alvo_Mascarado',
+    'Pedido',
+    'Resumo',
+    'Detalhes',
+  ];
+  const rows = events.map((ev) => [
+    new Date(ev.timestamp).toLocaleString('pt-BR'),
+    SECURITY_CATEGORY_LABELS[ev.category] || ev.category,
+    SECURITY_OUTCOME_META[ev.outcome]?.label || ev.outcome,
+    `"${(ev.actorLabel || '').replace(/"/g, '""')}"`,
+    `"${(ev.maskedTarget || '').replace(/"/g, '""')}"`,
+    ev.orderId || '',
+    `"${(ev.summary || '').replace(/"/g, '""')}"`,
+    `"${(ev.detail || '').replace(/"/g, '""')}"`,
+  ]);
+  return [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\n');
+}
+
+export const DEFAULT_PROMO_BADGE_COLOR = '#E5B800';
+export const DEFAULT_HIGHLIGHT_BADGE_COLOR = '#FF6B00';
+
+export interface BadgeColorPreset {
+  id: string;
+  name: string;
+  hex: string;
+}
+
+export const PROMO_BADGE_COLOR_PRESETS: BadgeColorPreset[] = [
+  { id: 'amber', name: 'Amarelo Oferta', hex: '#E5B800' },
+  { id: 'orange', name: 'Laranja Destaque', hex: '#FF6B00' },
+  { id: 'red', name: 'Vermelho Limper', hex: '#E3262E' },
+  { id: 'green', name: 'Verde Economia', hex: '#15803D' },
+  { id: 'blue', name: 'Azul Profissional', hex: '#1D4ED8' },
+  { id: 'purple', name: 'Roxo Especial', hex: '#7C3AED' },
+  { id: 'pink', name: 'Rosa Campanha', hex: '#DB2777' },
+  { id: 'black', name: 'Preto Black Friday', hex: '#18181B' },
+];
+
+export function normalizeHexColor(
+  input: string | undefined | null,
+  fallback: string = DEFAULT_PROMO_BADGE_COLOR
+): string {
+  const safeFallback = /^#[0-9A-F]{6}$/i.test(fallback)
+    ? fallback.toUpperCase()
+    : DEFAULT_PROMO_BADGE_COLOR;
+  if (!input) return safeFallback;
+  const trimmed = input.trim().replace(/^#/, '');
+  if (/^[0-9A-Fa-f]{6}$/.test(trimmed)) {
+    return `#${trimmed.toUpperCase()}`;
+  }
+  if (/^[0-9A-Fa-f]{3}$/.test(trimmed)) {
+    const expanded = trimmed
+      .split('')
+      .map((ch) => ch + ch)
+      .join('');
+    return `#${expanded.toUpperCase()}`;
+  }
+  return safeFallback;
+}
+
+export function getContrastTextColor(hexColor: string): '#18181B' | '#FFFFFF' {
+  const hex = normalizeHexColor(hexColor, DEFAULT_PROMO_BADGE_COLOR).slice(1);
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+
+  const toLinear = (c: number) =>
+    c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+
+  const luminance =
+    0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+
+  return luminance > 0.42 ? '#18181B' : '#FFFFFF';
+}
+
+export interface ResolvedProductBadgeStyle {
+  backgroundColor: string;
+  color: '#18181B' | '#FFFFFF';
+  isCustom: boolean;
+  presetName: string;
+}
+
+export function resolveProductBadgeStyle(
+  colorHex: string | undefined | null,
+  kind: 'promo' | 'highlight'
+): ResolvedProductBadgeStyle {
+  const defaultHex =
+    kind === 'promo' ? DEFAULT_PROMO_BADGE_COLOR : DEFAULT_HIGHLIGHT_BADGE_COLOR;
+  const normalized = normalizeHexColor(colorHex, defaultHex);
+  const preset = PROMO_BADGE_COLOR_PRESETS.find((p) => p.hex === normalized);
+  return {
+    backgroundColor: normalized,
+    color: getContrastTextColor(normalized),
+    isCustom: normalized !== defaultHex,
+    presetName: preset ? preset.name : 'Cor personalizada',
+  };
+}
+
+// ============================================================================
+// ADMIN USER MANAGEMENT, RBAC PERMISSIONS & DASHBOARD CLOCK / GREETING
+// ============================================================================
+
+export const ALL_ADMIN_TABS: AdminAppTab[] = [
+  'kanban',
+  'products',
+  'kits',
+  'banners',
+  'coupons',
+  'categories',
+  'customers',
+  'users',
+  'security',
+  'settings',
+];
+
+export interface AdminTabCatalogEntry {
+  id: AdminAppTab;
+  label: string;
+  shortLabel: string;
+  description: string;
+  group: 'Operação' | 'Catálogo & Marketing' | 'Governança';
+  masterOnly?: boolean;
+}
+
+export const ADMIN_TAB_CATALOG: AdminTabCatalogEntry[] = [
+  {
+    id: 'kanban',
+    label: 'Kanban de Separação',
+    shortLabel: 'Kanban',
+    description: 'Fila de pedidos 15min, lançamento PDV balcão e histórico.',
+    group: 'Operação',
+  },
+  {
+    id: 'customers',
+    label: 'Clientes & Recompra',
+    shortLabel: 'Clientes',
+    description: 'Base de clientes, histórico de pedidos e recompra.',
+    group: 'Operação',
+  },
+  {
+    id: 'products',
+    label: 'Produtos & Fotos',
+    shortLabel: 'Produtos',
+    description: 'Cadastro, preços, visibilidade, selos e galeria de fotos.',
+    group: 'Catálogo & Marketing',
+  },
+  {
+    id: 'kits',
+    label: 'Kits & Combos',
+    shortLabel: 'Kits',
+    description: 'Montagem de kits promocionais e combos de economia.',
+    group: 'Catálogo & Marketing',
+  },
+  {
+    id: 'banners',
+    label: 'Banners & Promoções',
+    shortLabel: 'Banners',
+    description: 'Carrossel principal e faixas promocionais da vitrine.',
+    group: 'Catálogo & Marketing',
+  },
+  {
+    id: 'coupons',
+    label: 'Cupons de Desconto',
+    shortLabel: 'Cupons',
+    description: 'Códigos promocionais, regras de desconto e validade.',
+    group: 'Catálogo & Marketing',
+  },
+  {
+    id: 'categories',
+    label: 'Categorias Quimiprol',
+    shortLabel: 'Categorias',
+    description: 'Linhas de produtos, ícones e organização do menu.',
+    group: 'Catálogo & Marketing',
+  },
+  {
+    id: 'security',
+    label: 'Acesso & Segurança',
+    shortLabel: 'Segurança',
+    description: 'Logs de atividades por usuário e auditoria LGPD de rastreio.',
+    group: 'Governança',
+  },
+  {
+    id: 'settings',
+    label: 'Loja, PIX & Frete',
+    shortLabel: 'Loja & Frete',
+    description: 'Dados da loja física, chave PIX, horários e bairros de entrega.',
+    group: 'Governança',
+  },
+  {
+    id: 'users',
+    label: 'Usuários & Acessos',
+    shortLabel: 'Usuários',
+    description: 'Exclusivo Master: criar usuários Master ou com níveis e permissões.',
+    group: 'Governança',
+    masterOnly: true,
+  },
+];
+
+export const ASSIGNABLE_NON_MASTER_TABS: AdminAppTab[] = ADMIN_TAB_CATALOG.filter(
+  (t) => !t.masterOnly
+).map((t) => t.id);
+
+export interface AdminRoleMeta {
+  level: AdminRoleLevel;
+  label: string;
+  shortLabel: string;
+  description: string;
+  badgeClass: string;
+  defaultTabs: AdminAppTab[];
+}
+
+export const ADMIN_ROLE_META: Record<AdminRoleLevel, AdminRoleMeta> = {
+  master: {
+    level: 'master',
+    label: 'Master (Controle Total)',
+    shortLabel: 'Master',
+    description:
+      'Acesso irrestrito a todas as áreas, logs de auditoria e criação de novos usuários Master ou por nível.',
+    badgeClass: 'bg-zinc-950 text-[#FFBE00] border-zinc-950',
+    defaultTabs: [...ALL_ADMIN_TABS],
+  },
+  manager: {
+    level: 'manager',
+    label: 'Gerente Operacional',
+    shortLabel: 'Gerente',
+    description:
+      'Acompanha operação, catálogo, campanhas, clientes, configurações e relatórios de segurança.',
+    badgeClass: 'bg-amber-50 text-amber-900 border-amber-300',
+    defaultTabs: [
+      'kanban',
+      'products',
+      'kits',
+      'banners',
+      'coupons',
+      'categories',
+      'customers',
+      'security',
+      'settings',
+    ],
+  },
+  operator: {
+    level: 'operator',
+    label: 'Operador de Separação & Balcão',
+    shortLabel: 'Operador',
+    description:
+      'Focado no Kanban de pedidos 15min, lançamento balcão/telefone e base de clientes.',
+    badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+    defaultTabs: ['kanban', 'customers'],
+  },
+  catalog: {
+    level: 'catalog',
+    label: 'Editor de Catálogo & Ofertas',
+    shortLabel: 'Catálogo',
+    description:
+      'Gerencia produtos, fotos, selos promocionais, kits, banners, cupons e categorias.',
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    defaultTabs: ['products', 'kits', 'banners', 'coupons', 'categories'],
+  },
+  viewer: {
+    level: 'viewer',
+    label: 'Consulta / Supervisão',
+    shortLabel: 'Consulta',
+    description:
+      'Visualização enxuta dos módulos selecionados (ex: Kanban e Relatórios de Segurança).',
+    badgeClass: 'bg-zinc-100 text-zinc-700 border-zinc-300',
+    defaultTabs: ['kanban', 'security'],
+  },
+};
+
+export const DEFAULT_ADMIN_USERS: AdminUser[] = [
+  {
+    id: 'admin-master-1',
+    name: 'Administrador Master',
+    username: 'admin',
+    password: 'limper123',
+    role: 'master',
+    jobTitle: 'Diretoria · Limper MT',
+    email: 'gestao@limpermt.com.br',
+    allowedTabs: [...ALL_ADMIN_TABS],
+    active: true,
+    createdAt: '2026-01-01T08:00:00.000Z',
+    createdBy: 'Sistema Limper MT',
+  },
+];
+
+export function normalizeAdminUsername(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/\s+/g, '.')
+    .replace(/[^a-z0-9._-]/g, '')
+    .slice(0, 32);
+}
+
+export function getEffectiveAllowedTabs(
+  user: Pick<AdminUser, 'role' | 'allowedTabs'> | null | undefined
+): AdminAppTab[] {
+  if (!user) return [];
+  if (user.role === 'master') {
+    return [...ALL_ADMIN_TABS];
+  }
+  const allowedSet = new Set<AdminAppTab>(
+    (user.allowedTabs || []).filter(
+      (tab): tab is AdminAppTab =>
+        tab !== 'users' && ASSIGNABLE_NON_MASTER_TABS.includes(tab)
+    )
+  );
+  if (allowedSet.size === 0) {
+    return ['kanban'];
+  }
+  return ALL_ADMIN_TABS.filter((tab) => allowedSet.has(tab));
+}
+
+export function canAdminUserAccessTab(
+  user: Pick<AdminUser, 'role' | 'allowedTabs'> | null | undefined,
+  tab: AdminAppTab
+): boolean {
+  if (!user) return false;
+  if (tab === 'users') {
+    return user.role === 'master';
+  }
+  return getEffectiveAllowedTabs(user).includes(tab);
+}
+
+export type AdminAuthResult =
+  | { ok: true; user: AdminUser }
+  | { ok: false; reason: 'invalid_credentials' | 'inactive_account'; matchedUser?: AdminUser };
+
+export function authenticateAdminUser(
+  users: AdminUser[],
+  rawUsername: string,
+  rawPassword: string
+): AdminAuthResult {
+  const cleanUser = rawUsername.trim().toLowerCase().replace(/^@+/, '');
+  const cleanPass = rawPassword.trim();
+  if (!cleanUser || !cleanPass) {
+    return { ok: false, reason: 'invalid_credentials' };
+  }
+
+  let matched = users.find((u) => u.username.toLowerCase() === cleanUser);
+  // Preserve legacy "limper" alias mapped to default "admin" if no explicit "limper" account exists
+  if (!matched && cleanUser === 'limper') {
+    matched = users.find((u) => u.username.toLowerCase() === 'admin');
+  }
+
+  if (!matched || matched.password !== cleanPass) {
+    return { ok: false, reason: 'invalid_credentials' };
+  }
+
+  if (!matched.active) {
+    return { ok: false, reason: 'inactive_account', matchedUser: matched };
+  }
+
+  return { ok: true, user: matched };
+}
+
+export interface AdminUserDraftValidation {
+  valid: boolean;
+  error?: string;
+}
+
+export function validateAdminUserDraft(
+  draft: {
+    name: string;
+    username: string;
+    password: string;
+    role: AdminRoleLevel;
+    allowedTabs: AdminAppTab[];
+    active: boolean;
+    avatarUrl?: string;
+  },
+  existingUsers: AdminUser[],
+  editingUserId?: string | null
+): AdminUserDraftValidation {
+  const cleanName = draft.name.trim();
+  const cleanUsername = normalizeAdminUsername(draft.username);
+  const cleanPass = draft.password.trim();
+
+  if (cleanName.length < 2) {
+    return { valid: false, error: 'Informe o nome completo do usuário (mínimo 2 caracteres).' };
+  }
+  if (cleanUsername.length < 3) {
+    return {
+      valid: false,
+      error: 'Informe um login de acesso válido com pelo menos 3 caracteres (ex: maria.loja).',
+    };
+  }
+  if (cleanPass.length < 4) {
+    return { valid: false, error: 'A senha de acesso deve ter pelo menos 4 caracteres.' };
+  }
+
+  const duplicate = existingUsers.find(
+    (u) => u.username.toLowerCase() === cleanUsername && u.id !== editingUserId
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `O login "@${cleanUsername}" já está em uso por ${duplicate.name}. Escolha outro login.`,
+    };
+  }
+
+  if (draft.role !== 'master') {
+    const validNonMasterTabs = (draft.allowedTabs || []).filter(
+      (t) => t !== 'users' && ASSIGNABLE_NON_MASTER_TABS.includes(t)
+    );
+    if (validNonMasterTabs.length === 0) {
+      return {
+        valid: false,
+        error: 'Selecione pelo menos 1 módulo que este usuário poderá visualizar no painel.',
+      };
+    }
+  }
+
+  if (editingUserId) {
+    const otherActiveMasters = existingUsers.filter(
+      (u) => u.id !== editingUserId && u.role === 'master' && u.active
+    );
+    const currentIsActiveMaster = draft.role === 'master' && draft.active;
+    if (!currentIsActiveMaster && otherActiveMasters.length === 0) {
+      return {
+        valid: false,
+        error:
+          'O sistema precisa manter pelo menos 1 usuário Master ativo. Crie outro Master antes de rebaixar ou desativar esta conta.',
+      };
+    }
+  }
+
+  const avatarTrimmed = (draft.avatarUrl || '').trim();
+  if (
+    avatarTrimmed &&
+    !avatarTrimmed.startsWith('data:image/') &&
+    !/^https?:\/\//i.test(avatarTrimmed) &&
+    !avatarTrimmed.startsWith('/')
+  ) {
+    return {
+      valid: false,
+      error: 'O link da imagem deve começar com https://, http:// ou ser enviado do computador.',
+    };
+  }
+
+  return { valid: true };
+}
+
+export function getUserInitials(name: string | undefined | null): string {
+  const parts = (name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return 'LM';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+export function getTimeOfDayGreeting(date: Date = new Date()): string {
+  const hour = date.getHours();
+  if (hour >= 5 && hour < 12) return 'Bom dia';
+  if (hour >= 12 && hour < 18) return 'Boa tarde';
+  return 'Boa noite';
+}
+
+export interface FormattedAdminDateTime {
+  greeting: string;
+  weekday: string;
+  fullDate: string;
+  shortDate: string;
+  timeWithSeconds: string;
+  timeShort: string;
+}
+
+export function formatAdminDashboardDateTime(
+  date: Date = new Date()
+): FormattedAdminDateTime {
+  const weekdayRaw = date.toLocaleDateString('pt-BR', { weekday: 'long' });
+  const weekday = weekdayRaw.charAt(0).toUpperCase() + weekdayRaw.slice(1);
+  const fullDate = date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
+  const shortDate = date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  const timeWithSeconds = date.toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const timeShort = timeWithSeconds.slice(0, 5);
+
+  return {
+    greeting: getTimeOfDayGreeting(date),
+    weekday,
+    fullDate,
+    shortDate,
+    timeWithSeconds,
+    timeShort,
+  };
+}
+
+export function formatAdminActorLabel(
+  user: Pick<AdminUser, 'name' | 'username'> | null | undefined
+): string {
+  if (!user) return 'Gestor Lojista';
+  return `${user.name} (@${user.username})`;
+}
+
+// ============================================================================
+// SITE BACKUP & RESTORE SNAPSHOT ENGINE (MASTER VAULT)
+// ============================================================================
+
+export const MAX_STORED_SITE_BACKUPS = 20;
+
+export const SITE_BACKUP_TRIGGER_META: Record<
+  SiteBackupTrigger,
+  { label: string; badgeClass: string }
+> = {
+  manual: {
+    label: 'Backup Manual',
+    badgeClass: 'bg-[#FFFBEB] text-amber-900 border-amber-300',
+  },
+  auto_daily: {
+    label: 'Automático Diário',
+    badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+  },
+  pre_restore: {
+    label: 'Segurança Pré-Restauração',
+    badgeClass: 'bg-zinc-900 text-[#FFBE00] border-zinc-900',
+  },
+  imported: {
+    label: 'Importado (.JSON)',
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  },
+};
+
+export function formatBackupByteSize(bytes: number): string {
+  const safe = Math.max(0, Number.isFinite(bytes) ? bytes : 0);
+  if (safe < 1024) return `${Math.round(safe)} B`;
+  const kb = safe / 1024;
+  if (kb < 1024) return `${kb.toFixed(1).replace('.', ',')} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(2).replace('.', ',')} MB`;
+}
+
+export function createSiteBackupSnapshot(
+  params: {
+    payload: SiteBackupPayload;
+    label?: string;
+    trigger?: SiteBackupTrigger;
+    createdBy: string;
+    createdByUsername?: string;
+  },
+  nowMs: number = Date.now()
+): SiteBackupSnapshot {
+  const nowDate = new Date(nowMs);
+  const createdAt = nowDate.toISOString();
+  const dateKey = toDateKeyYmd(nowDate, true);
+  const trigger: SiteBackupTrigger = params.trigger || 'manual';
+  const defaultLabel =
+    trigger === 'pre_restore'
+      ? `Ponto de segurança antes de restauração (${formatBrDateFromYmd(dateKey)})`
+      : trigger === 'imported'
+      ? `Backup importado (${formatBrDateFromYmd(dateKey)})`
+      : `Backup completo do site · ${formatBrDateFromYmd(dateKey)}`;
+
+  // Deep-clone payload cleanly so subsequent live edits never mutate stored snapshots
+  const clonedPayload = JSON.parse(
+    JSON.stringify(params.payload)
+  ) as SiteBackupPayload;
+  const serializedSize = JSON.stringify(clonedPayload).length;
+  const suffix = Math.random().toString(36).slice(2, 6);
+
+  return {
+    id: `bkp-${dateKey.replace(/-/g, '')}-${nowMs}-${suffix}`,
+    createdAt,
+    dateKey,
+    label: (params.label || '').trim().slice(0, 90) || defaultLabel,
+    trigger,
+    createdBy: (params.createdBy || 'Administrador Master').trim().slice(0, 60),
+    createdByUsername: params.createdByUsername
+      ? params.createdByUsername.trim().toLowerCase().replace(/^@/, '')
+      : undefined,
+    summary: {
+      categoriesCount: clonedPayload.categories.length,
+      productsCount: clonedPayload.products.length,
+      kitsCount: clonedPayload.kits.length,
+      bannersCount: clonedPayload.banners.length,
+      couponsCount: clonedPayload.coupons.length,
+      ordersCount: clonedPayload.orders.length,
+      adminUsersCount: clonedPayload.adminUsers.length,
+      securityLogsCount: clonedPayload.securityLogs?.length || 0,
+      sizeBytes: serializedSize,
+    },
+    payload: clonedPayload,
+  };
+}
+
+export function appendSiteBackupSnapshot(
+  backups: SiteBackupSnapshot[],
+  snapshot: SiteBackupSnapshot,
+  maxEntries: number = MAX_STORED_SITE_BACKUPS
+): SiteBackupSnapshot[] {
+  const safeCap = Math.max(1, maxEntries);
+  return [snapshot, ...backups.filter((b) => b.id !== snapshot.id)].slice(
+    0,
+    safeCap
+  );
+}
+
+export function filterSiteBackupsByDate(
+  backups: SiteBackupSnapshot[],
+  filters: {
+    specificDate?: string; // YYYY-MM-DD
+    searchQuery?: string;
+  }
+): SiteBackupSnapshot[] {
+  const targetDate = (filters.specificDate || '').trim();
+  const q = (filters.searchQuery || '').trim().toLowerCase();
+
+  return backups.filter((b) => {
+    if (targetDate && b.dateKey !== targetDate) return false;
+    if (!q) return true;
+    return (
+      b.label.toLowerCase().includes(q) ||
+      b.createdBy.toLowerCase().includes(q) ||
+      (b.createdByUsername || '').toLowerCase().includes(q) ||
+      formatBrDateFromYmd(b.dateKey).includes(q) ||
+      b.dateKey.includes(q)
+    );
+  });
+}
+
+export function summarizeSiteBackupDates(
+  backups: SiteBackupSnapshot[],
+  maxDates: number = 12
+): SecurityLogDateSummary[] {
+  const counts = new Map<string, number>();
+  for (const b of backups) {
+    if (!b.dateKey) continue;
+    counts.set(b.dateKey, (counts.get(b.dateKey) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, maxDates)
+    .map(([dateKey, count]) => ({
+      dateKey,
+      label: formatBrDateFromYmd(dateKey),
+      count,
+    }));
+}
+
+export function parseImportedSiteBackupJson(
+  rawJson: string,
+  importedBy: { label: string; username?: string },
+  nowMs: number = Date.now()
+): { ok: true; snapshot: SiteBackupSnapshot } | { ok: false; error: string } {
+  try {
+    const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') {
+      return { ok: false, error: 'Arquivo JSON inválido para backup do site.' };
+    }
+
+    const candidatePayload = (
+      parsed.payload && typeof parsed.payload === 'object'
+        ? parsed.payload
+        : parsed
+    ) as Partial<SiteBackupPayload>;
+
+    if (
+      !Array.isArray(candidatePayload.categories) ||
+      !Array.isArray(candidatePayload.products) ||
+      !Array.isArray(candidatePayload.orders) ||
+      !candidatePayload.settings ||
+      typeof candidatePayload.settings !== 'object'
+    ) {
+      return {
+        ok: false,
+        error:
+          'Estrutura de backup incompatível. Selecione um arquivo .json exportado pelo Gestor Limper MT.',
+      };
+    }
+
+    const safeAdminUsers =
+      Array.isArray(candidatePayload.adminUsers) &&
+      candidatePayload.adminUsers.some((u) => u && u.role === 'master' && u.active)
+        ? candidatePayload.adminUsers
+        : DEFAULT_ADMIN_USERS;
+
+    const normalizedPayload: SiteBackupPayload = {
+      categories: candidatePayload.categories,
+      products: candidatePayload.products,
+      kits: Array.isArray(candidatePayload.kits) ? candidatePayload.kits : [],
+      coupons: Array.isArray(candidatePayload.coupons)
+        ? candidatePayload.coupons
+        : [],
+      banners: Array.isArray(candidatePayload.banners)
+        ? candidatePayload.banners
+        : [],
+      orders: candidatePayload.orders,
+      settings: candidatePayload.settings,
+      adminUsers: safeAdminUsers,
+      securityLogs: Array.isArray(candidatePayload.securityLogs)
+        ? candidatePayload.securityLogs
+        : [],
+    };
+
+    const originalLabel =
+      typeof parsed.label === 'string' && parsed.label.trim()
+        ? parsed.label.trim()
+        : undefined;
+
+    const snapshot = createSiteBackupSnapshot(
+      {
+        payload: normalizedPayload,
+        label: originalLabel
+          ? `Importado: ${originalLabel}`
+          : undefined,
+        trigger: 'imported',
+        createdBy: importedBy.label,
+        createdByUsername: importedBy.username,
+      },
+      nowMs
+    );
+
+    if (typeof parsed.dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.dateKey)) {
+      snapshot.dateKey = parsed.dateKey;
+    }
+    if (typeof parsed.createdAt === 'string' && !Number.isNaN(new Date(parsed.createdAt).getTime())) {
+      snapshot.createdAt = parsed.createdAt;
+    }
+
+    return { ok: true, snapshot };
+  } catch {
+    return {
+      ok: false,
+      error: 'Não foi possível ler o arquivo selecionado. Verifique se é um JSON válido.',
+    };
+  }
+}
+
+
 

@@ -1,20 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Bike,
+  Building2,
   Check,
   Copy,
   CreditCard,
+  Loader2,
   MapPin,
   MessageCircle,
   Minus,
   Plus,
   Printer,
   QrCode,
+  Search,
   ShoppingBag,
   Store,
   TicketPercent,
   Trash2,
   Truck,
+  User,
   X,
 } from 'lucide-react';
 import {
@@ -43,9 +47,19 @@ import {
   getLogisticsSettings,
   isOrderQuoteOnly,
   isProductPriceVisible,
+  matchCustomerPhoneExact,
   normalizePhone,
   validateCheckoutInput,
 } from '../utils/commerce';
+import {
+  DocumentKind,
+  detectDocumentType,
+  formatCep,
+  formatDocumentByType,
+  isValidDocument,
+  lookupCepAddress,
+  onlyDigits,
+} from '../utils/brInputMasks';
 import { ProductImageWithFallback } from './CategoryIcon';
 
 interface CartCheckoutDrawerProps {
@@ -77,10 +91,22 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
   onSaveCustomerProfile,
   onCompleteOrder,
 }) => {
+  const initialDocType: DocumentKind =
+    customerProfile.documentType || detectDocumentType(customerProfile.cpfCnpj);
+
   const [step, setStep] = useState<'cart' | 'checkout'>('cart');
   const [customerName, setCustomerName] = useState(customerProfile.name || '');
-  const [customerPhone, setCustomerPhone] = useState(customerProfile.phone || '');
+  const [customerPhone, setCustomerPhone] = useState(
+    customerProfile.phone ? formatPhone(customerProfile.phone) : ''
+  );
+  const [documentType, setDocumentType] = useState<DocumentKind>(initialDocType);
+  const [customerDocument, setCustomerDocument] = useState(
+    customerProfile.cpfCnpj
+      ? formatDocumentByType(customerProfile.cpfCnpj, initialDocType)
+      : ''
+  );
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('delivery');
+  const [cep, setCep] = useState(formatCep(customerProfile.cep || ''));
   const [street, setStreet] = useState(customerProfile.street || '');
   const [number, setNumber] = useState(customerProfile.number || '');
   const [neighborhood, setNeighborhood] = useState(
@@ -104,13 +130,44 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
   const [appliedCoupon, setAppliedCoupon] = useState(initialCouponCode || '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedPix, setCopiedPix] = useState(false);
+  const [cepStatus, setCepStatus] = useState<{
+    type: 'idle' | 'loading' | 'success' | 'error';
+    message?: string;
+  }>({ type: 'idle' });
+  const lastFetchedCepRef = useRef<string>('');
+  const numberInputRef = useRef<HTMLInputElement>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (initialCouponCode) {
       setCouponInput(initialCouponCode);
       setAppliedCoupon(initialCouponCode);
     }
   }, [initialCouponCode]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const nextDocType: DocumentKind =
+      customerProfile.documentType || detectDocumentType(customerProfile.cpfCnpj);
+    setCustomerName(customerProfile.name || '');
+    setCustomerPhone(customerProfile.phone ? formatPhone(customerProfile.phone) : '');
+    setDocumentType(nextDocType);
+    setCustomerDocument(
+      customerProfile.cpfCnpj
+        ? formatDocumentByType(customerProfile.cpfCnpj, nextDocType)
+        : ''
+    );
+    setCep(formatCep(customerProfile.cep || ''));
+    setStreet(customerProfile.street || '');
+    setNumber(customerProfile.number || '');
+    setNeighborhood(
+      customerProfile.neighborhood || settings.neighborhoodFees[0]?.name || 'Centro'
+    );
+    setCity(customerProfile.city || 'Várzea Grande');
+    setInteriorCityName(customerProfile.interiorCityName || '');
+    setReference(customerProfile.reference || '');
+    setCepStatus({ type: 'idle' });
+    lastFetchedCepRef.current = onlyDigits(customerProfile.cep || '');
+  }, [isOpen, customerProfile, settings.neighborhoodFees]);
 
   const totals = calculateCartTotals(
     cart,
@@ -164,24 +221,92 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
 
   const handlePhoneBlur = () => {
     const clean = normalizePhone(customerPhone);
-    if (clean.length >= 10) {
-      const lastOrderWithAddress = existingOrders.find(
-        (o) => normalizePhone(o.customerPhone) === clean
+    if (
+      customerProfile.isRegistered &&
+      clean.length >= 10 &&
+      matchCustomerPhoneExact(customerProfile.phone, clean)
+    ) {
+      const lastOrderWithAddress = existingOrders.find((o) =>
+        matchCustomerPhoneExact(o.customerPhone, clean)
       );
       if (lastOrderWithAddress) {
         if (!customerName.trim()) {
           setCustomerName(lastOrderWithAddress.customerName);
         }
         if (lastOrderWithAddress.address && !street.trim()) {
+          if (lastOrderWithAddress.address.cep) {
+            setCep(formatCep(lastOrderWithAddress.address.cep));
+          }
           setStreet(lastOrderWithAddress.address.street);
           setNumber(lastOrderWithAddress.address.number);
           setNeighborhood(lastOrderWithAddress.address.neighborhood);
           setCity(lastOrderWithAddress.address.city);
+          setInteriorCityName(lastOrderWithAddress.address.interiorCityName || '');
           setReference(lastOrderWithAddress.address.reference || '');
         }
       }
     }
   };
+
+  const runCheckoutCepLookup = async (rawCepValue: string, force = false) => {
+    const digits = onlyDigits(rawCepValue);
+    if (digits.length !== 8) {
+      if (force) {
+        setCepStatus({
+          type: 'error',
+          message: 'Digite os 8 dígitos do CEP para carregar seu endereço.',
+        });
+      }
+      return;
+    }
+    if (!force && lastFetchedCepRef.current === digits) return;
+    lastFetchedCepRef.current = digits;
+
+    setCepStatus({ type: 'loading', message: 'Carregando endereço pelo CEP...' });
+    const result = await lookupCepAddress(digits);
+    if (result.found) {
+      setCep(result.cep);
+      if (result.street) setStreet(result.street);
+      if (result.neighborhood) setNeighborhood(result.neighborhood);
+      setCity(result.deliveryCityOption);
+      setInteriorCityName(result.interiorCityName);
+      setCepStatus({
+        type: 'success',
+        message: `Endereço carregado (${result.cep}): ${
+          result.street ? `${result.street}, ` : ''
+        }${result.neighborhood ? `${result.neighborhood} · ` : ''}${result.cityName}/${result.uf}`,
+      });
+      setTimeout(() => numberInputRef.current?.focus(), 60);
+    } else {
+      setCepStatus({
+        type: 'error',
+        message: 'CEP não encontrado automaticamente. Confira ou preencha abaixo.',
+      });
+    }
+  };
+
+  const handleCheckoutCepChange = (rawVal: string) => {
+    const masked = formatCep(rawVal);
+    setCep(masked);
+    const digits = onlyDigits(masked);
+    if (digits.length === 8) {
+      void runCheckoutCepLookup(digits);
+    } else {
+      lastFetchedCepRef.current = '';
+      if (cepStatus.type !== 'idle') setCepStatus({ type: 'idle' });
+    }
+  };
+
+  const handleCheckoutDocTypeSwitch = (nextType: DocumentKind) => {
+    setDocumentType(nextType);
+    setCustomerDocument((prev) => formatDocumentByType(prev, nextType));
+  };
+
+  const checkoutDocDigits = onlyDigits(customerDocument);
+  const expectedCheckoutDocLen = documentType === 'cnpj' ? 14 : 11;
+  const isCheckoutDocComplete = checkoutDocDigits.length === expectedCheckoutDocLen;
+  const isCheckoutDocValid =
+    isCheckoutDocComplete && isValidDocument(customerDocument, documentType);
 
   const handleCopyPix = async () => {
     try {
@@ -201,7 +326,10 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
     const validationError = validateCheckoutInput({
       customerName,
       customerPhone,
+      customerDocument,
+      customerDocumentType: documentType,
       deliveryType,
+      cep,
       city,
       interiorCityName,
       street,
@@ -223,12 +351,19 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
     const orderTotal = isInteriorMt
       ? Math.max(0, Math.round((totals.subtotal - totals.couponDiscount) * 100) / 100)
       : totals.total;
+    const formattedDocument =
+      checkoutDocDigits.length > 0
+        ? formatDocumentByType(customerDocument, documentType)
+        : undefined;
+    const formattedCep = onlyDigits(cep).length === 8 ? formatCep(cep) : undefined;
 
     const newOrder: Order = {
       id: `#LMP-${nextOrderNumber}`,
       createdAt: new Date().toISOString(),
       customerName: customerName.trim(),
       customerPhone: normalizePhone(customerPhone),
+      customerDocument: formattedDocument,
+      customerDocumentType: formattedDocument ? documentType : undefined,
       pickupCode:
         deliveryType === 'pickup'
           ? `BALCÃO-${nextOrderNumber}`
@@ -268,6 +403,7 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
       address:
         deliveryType === 'delivery'
           ? {
+              cep: formattedCep,
               street: street.trim(),
               number: number.trim(),
               neighborhood: neighborhood.trim(),
@@ -288,8 +424,12 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
     };
 
     onSaveCustomerProfile({
+      ...customerProfile,
       name: customerName.trim(),
       phone: normalizePhone(customerPhone),
+      documentType,
+      cpfCnpj: formattedDocument || customerProfile.cpfCnpj,
+      cep: formattedCep || customerProfile.cep,
       street: street.trim(),
       number: number.trim(),
       neighborhood: neighborhood.trim(),
@@ -738,7 +878,7 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
               )}
 
               {/* 1. Identificação Ágil */}
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <h3 className="font-display text-sm font-extrabold text-zinc-900">
                   1. Identificação Rápida (Sem Senha)
                 </h3>
@@ -753,12 +893,14 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                     <input
                       id="checkout-phone"
                       type="tel"
+                      inputMode="numeric"
+                      maxLength={15}
                       required
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(formatPhone(e.target.value))}
                       onBlur={handlePhoneBlur}
                       placeholder="(65) 99999-9999"
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono tabular-nums focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                     />
                   </div>
                   <div>
@@ -766,7 +908,9 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                       htmlFor="checkout-name"
                       className="block text-xs font-semibold text-zinc-700 mb-1"
                     >
-                      Nome Completo ou Empresa *
+                      {documentType === 'cnpj'
+                        ? 'Razão Social / Empresa *'
+                        : 'Nome Completo ou Empresa *'}
                     </label>
                     <input
                       id="checkout-name"
@@ -774,9 +918,100 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                       required
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
-                      placeholder="Ex: João Silva"
+                      placeholder={
+                        documentType === 'cnpj'
+                          ? 'Ex: Condomínio Solar / Empresa'
+                          : 'Ex: João Silva'
+                      }
                       className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                     />
+                  </div>
+                </div>
+
+                {/* CPF ou CNPJ com Máscara */}
+                <div className="p-2.5 rounded-xl bg-[#FAFAFA] border border-zinc-200 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label
+                      htmlFor="checkout-document"
+                      className="text-xs font-semibold text-zinc-700"
+                    >
+                      {documentType === 'cnpj'
+                        ? 'CNPJ para Nota / Pedido (Opcional)'
+                        : 'CPF para Nota / Pedido (Opcional)'}
+                    </label>
+                    <div
+                      role="group"
+                      aria-label="Tipo de documento no pedido"
+                      className="inline-flex rounded-lg bg-white p-0.5 border border-zinc-200"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleCheckoutDocTypeSwitch('cpf')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                          documentType === 'cpf'
+                            ? 'bg-zinc-950 text-[#FFBE00]'
+                            : 'text-zinc-600 hover:text-zinc-950'
+                        }`}
+                      >
+                        <User className="w-2.5 h-2.5" />
+                        <span>CPF</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCheckoutDocTypeSwitch('cnpj')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                          documentType === 'cnpj'
+                            ? 'bg-zinc-950 text-[#FFBE00]'
+                            : 'text-zinc-600 hover:text-zinc-950'
+                        }`}
+                      >
+                        <Building2 className="w-2.5 h-2.5" />
+                        <span>CNPJ</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <input
+                      id="checkout-document"
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={documentType === 'cnpj' ? 18 : 14}
+                      value={customerDocument}
+                      onChange={(e) =>
+                        setCustomerDocument(
+                          formatDocumentByType(e.target.value, documentType)
+                        )
+                      }
+                      placeholder={
+                        documentType === 'cnpj'
+                          ? '00.000.000/0000-00'
+                          : '000.000.000-00'
+                      }
+                      className={`flex-1 px-3 py-2 bg-white border rounded-lg text-xs font-mono tabular-nums focus:outline-none ${
+                        isCheckoutDocComplete
+                          ? isCheckoutDocValid
+                            ? 'border-emerald-500'
+                            : 'border-rose-400'
+                          : 'border-zinc-300 focus:border-[#FFBE00]'
+                      }`}
+                    />
+                    {checkoutDocDigits.length > 0 && (
+                      <span
+                        className={`text-[10px] font-bold shrink-0 ${
+                          isCheckoutDocComplete
+                            ? isCheckoutDocValid
+                              ? 'text-emerald-700'
+                              : 'text-rose-600'
+                            : 'text-zinc-500'
+                        }`}
+                      >
+                        {isCheckoutDocComplete
+                          ? isCheckoutDocValid
+                            ? `${documentType.toUpperCase()} válido`
+                            : `${documentType.toUpperCase()} inválido`
+                          : `${checkoutDocDigits.length}/${expectedCheckoutDocLen} dígitos`}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -826,8 +1061,153 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
 
                 {deliveryType === 'delivery' ? (
                   <div className="space-y-3 bg-[#FAFAFA] p-3.5 rounded-xl border border-zinc-200">
+                    {/* 1º CEP FIRST -> Carrega Rua, Bairro e Cidade automaticamente */}
+                    <div className="p-3 rounded-xl bg-white border border-amber-300/90 space-y-2 shadow-2xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <label
+                          htmlFor="checkout-cep"
+                          className="text-xs font-extrabold text-zinc-900 flex items-center gap-1.5"
+                        >
+                          <MapPin className="w-3.5 h-3.5 text-[#E3262E]" />
+                          <span>1º Informe seu CEP (Carrega o endereço automático)</span>
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="checkout-cep"
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={9}
+                          value={cep}
+                          onChange={(e) => handleCheckoutCepChange(e.target.value)}
+                          placeholder="00000-000"
+                          className="flex-1 px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-lg text-sm font-mono font-bold tabular-nums focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void runCheckoutCepLookup(cep, true)}
+                          disabled={cepStatus.type === 'loading'}
+                          className="px-3.5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] disabled:opacity-70 text-zinc-950 font-extrabold text-xs rounded-lg inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                        >
+                          {cepStatus.type === 'loading' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Search className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {cepStatus.type === 'loading' ? 'Buscando...' : 'Buscar CEP'}
+                          </span>
+                        </button>
+                      </div>
+                      {cepStatus.type !== 'idle' && cepStatus.message && (
+                        <p
+                          role="status"
+                          className={`text-[11px] font-semibold leading-snug ${
+                            cepStatus.type === 'success'
+                              ? 'text-emerald-700'
+                              : cepStatus.type === 'error'
+                              ? 'text-rose-600'
+                              : 'text-zinc-600'
+                          }`}
+                        >
+                          {cepStatus.message}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Endereço (Carregado pelo CEP + editável) */}
+                    <div className="grid grid-cols-3 gap-2.5">
+                      <div className="col-span-2">
+                        <label
+                          htmlFor="checkout-street"
+                          className="block text-xs font-semibold text-zinc-700 mb-1"
+                        >
+                          Rua / Avenida *
+                        </label>
+                        <input
+                          id="checkout-street"
+                          type="text"
+                          required
+                          value={street}
+                          onChange={(e) => setStreet(e.target.value)}
+                          placeholder="Rua das Palmeiras"
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="checkout-number"
+                          className="block text-xs font-semibold text-zinc-700 mb-1"
+                        >
+                          Número *
+                        </label>
+                        <input
+                          ref={numberInputRef}
+                          id="checkout-number"
+                          type="text"
+                          required
+                          value={number}
+                          onChange={(e) => setNumber(e.target.value)}
+                          placeholder="120"
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label
+                          htmlFor="checkout-neighborhood"
+                          className="block text-xs font-semibold text-zinc-700 mb-1"
+                        >
+                          Bairro / Região *
+                        </label>
+                        <input
+                          id="checkout-neighborhood"
+                          type="text"
+                          list="checkout-neighborhood-list"
+                          required
+                          value={neighborhood}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setNeighborhood(val);
+                            const matched = settings.neighborhoodFees.find(
+                              (n) => n.name.toLowerCase() === val.trim().toLowerCase()
+                            );
+                            if (matched) setCity(matched.city);
+                          }}
+                          placeholder="Ex: Centro Norte, Coxipó..."
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
+                        />
+                        <datalist id="checkout-neighborhood-list">
+                          {settings.neighborhoodFees.map((nb) => (
+                            <option key={nb.id} value={nb.name}>
+                              {nb.name} ({nb.city})
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="checkout-reference"
+                          className="block text-xs font-semibold text-zinc-700 mb-1"
+                        >
+                          Ponto de Referência / Complemento
+                        </label>
+                        <input
+                          id="checkout-reference"
+                          type="text"
+                          value={reference}
+                          onChange={(e) => setReference(e.target.value)}
+                          placeholder="Ex: Próximo ao supermercado"
+                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
+                        />
+                      </div>
+                    </div>
+
                     {/* City Region & Logistics Mode Selector */}
-                    <div className="space-y-2">
+                    <div className="space-y-2 pt-1">
                       <label className="block text-xs font-bold text-zinc-800">
                         Cidade / Região de Entrega *
                       </label>
@@ -844,11 +1224,21 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                             type="button"
                             onClick={() => {
                               setCity(opt.id);
-                              if (opt.id === 'Várzea Grande' && !settings.neighborhoodFees.some((n) => n.city === 'Várzea Grande' && n.name === neighborhood)) {
+                              if (
+                                opt.id === 'Várzea Grande' &&
+                                !settings.neighborhoodFees.some(
+                                  (n) => n.city === 'Várzea Grande' && n.name === neighborhood
+                                ) &&
+                                !neighborhood.trim()
+                              ) {
                                 setNeighborhood('Centro Norte');
-                              } else if (opt.id === 'Cuiabá' && !settings.neighborhoodFees.some((n) => n.city === 'Cuiabá' && n.name === neighborhood)) {
-                                setNeighborhood('Centro');
-                              } else if (opt.id === 'Interior de MT' && settings.neighborhoodFees.some((n) => n.name === neighborhood)) {
+                              } else if (
+                                opt.id === 'Cuiabá' &&
+                                !settings.neighborhoodFees.some(
+                                  (n) => n.city === 'Cuiabá' && n.name === neighborhood
+                                ) &&
+                                !neighborhood.trim()
+                              ) {
                                 setNeighborhood('Centro');
                               }
                             }}
@@ -973,109 +1363,6 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                         </div>
                       </div>
                     )}
-
-                    <div className="grid grid-cols-3 gap-2.5">
-                      <div className="col-span-2">
-                        <label
-                          htmlFor="checkout-street"
-                          className="block text-xs font-semibold text-zinc-700 mb-1"
-                        >
-                          Rua / Avenida *
-                        </label>
-                        <input
-                          id="checkout-street"
-                          type="text"
-                          required
-                          value={street}
-                          onChange={(e) => setStreet(e.target.value)}
-                          placeholder="Rua das Palmeiras"
-                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label
-                          htmlFor="checkout-number"
-                          className="block text-xs font-semibold text-zinc-700 mb-1"
-                        >
-                          Número *
-                        </label>
-                        <input
-                          id="checkout-number"
-                          type="text"
-                          required
-                          value={number}
-                          onChange={(e) => setNumber(e.target.value)}
-                          placeholder="120"
-                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs font-mono"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div>
-                        <label
-                          htmlFor="checkout-neighborhood"
-                          className="block text-xs font-semibold text-zinc-700 mb-1"
-                        >
-                          Bairro / Região *
-                        </label>
-                        {city === 'Interior de MT' ? (
-                          <input
-                            id="checkout-neighborhood"
-                            type="text"
-                            required
-                            value={neighborhood}
-                            onChange={(e) => setNeighborhood(e.target.value)}
-                            placeholder="Ex: Centro / Setor Industrial"
-                            className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
-                          />
-                        ) : (
-                          <select
-                            id="checkout-neighborhood"
-                            value={neighborhood}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setNeighborhood(val);
-                              const matched = settings.neighborhoodFees.find(
-                                (n) => n.name === val
-                              );
-                              if (matched) setCity(matched.city);
-                            }}
-                            className="w-full px-2.5 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
-                          >
-                            {settings.neighborhoodFees.map((nb) => (
-                              <option key={nb.id} value={nb.name}>
-                                {totals.isQuoteOnly
-                                  ? `${nb.name} (${nb.city})`
-                                  : `${nb.name} (${nb.city}) - ${formatCurrency(nb.fee)}`}
-                              </option>
-                            ))}
-                            <option value="Outro Bairro">
-                              {totals.isQuoteOnly
-                                ? 'Outro Bairro (A combinar)'
-                                : `Outro Bairro (${formatCurrency(settings.defaultDeliveryFee)})`}
-                            </option>
-                          </select>
-                        )}
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="checkout-reference"
-                          className="block text-xs font-semibold text-zinc-700 mb-1"
-                        >
-                          Ponto de Referência / Complemento
-                        </label>
-                        <input
-                          id="checkout-reference"
-                          type="text"
-                          value={reference}
-                          onChange={(e) => setReference(e.target.value)}
-                          placeholder="Ex: Próximo ao supermercado"
-                          className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs"
-                        />
-                      </div>
-                    </div>
                   </div>
                 ) : (
                   <div className="p-3.5 rounded-xl bg-[#FDF6E2] border border-[#F3E3B2] flex items-start gap-2.5 text-xs text-zinc-800">
@@ -1562,6 +1849,15 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
         {/* Customer & Logistics Metadata */}
         <div className="text-xs font-mono space-y-1 text-zinc-900 border-b border-dashed border-zinc-300 pb-3">
           <div>CLIENTE: {order.customerName}</div>
+          {order.customerDocument && order.customerDocument.trim() && (
+            <div>
+              {order.customerDocumentType === 'cnpj' ||
+              onlyDigits(order.customerDocument).length > 11
+                ? 'CNPJ'
+                : 'CPF'}
+              : {order.customerDocument}
+            </div>
+          )}
           <div>WHATSAPP: {formatPhone(order.customerPhone)}</div>
           <div>
             TIPO:{' '}
@@ -1585,7 +1881,8 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
               {order.address.city === 'Interior de MT'
                 ? `${order.address.interiorCityName || 'Interior'} - MT`
                 : `${order.address.city}/MT`}
-              ){order.address.reference ? ` · Ref: ${order.address.reference}` : ''}
+              ){order.address.cep ? ` · CEP ${formatCep(order.address.cep)}` : ''}
+              {order.address.reference ? ` · Ref: ${order.address.reference}` : ''}
             </div>
           )}
           <div>PAGAMENTO: {formatPaymentMethodLabel(order)}</div>

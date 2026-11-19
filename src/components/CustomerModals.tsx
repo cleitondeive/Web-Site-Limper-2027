@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Bike,
+  Building2,
   Calculator,
   Check,
   ClipboardList,
+  Loader2,
   MapPin,
   MessageCircle,
   Plus,
@@ -13,6 +15,7 @@ import {
   Sparkles,
   Store,
   Truck,
+  User,
   UserCheck,
   UserPlus,
   X,
@@ -30,15 +33,21 @@ import {
   formatPhone,
   getEffectivePrice,
   getLogisticsSettings,
+  matchCustomerPhoneExact,
   normalizePhone,
 } from '../utils/commerce';
+import {
+  DocumentKind,
+  detectDocumentType,
+  formatCep,
+  formatDocumentByType,
+  isValidDocument,
+  lookupCepAddress,
+  onlyDigits,
+} from '../utils/brInputMasks';
 import { ProductImageWithFallback } from './CategoryIcon';
 
-export function formatCep(raw: string): string {
-  const digits = raw.replace(/\D/g, '').slice(0, 8);
-  if (digits.length <= 5) return digits;
-  return `${digits.slice(0, 5)}-${digits.slice(5)}`;
-}
+export { formatCep };
 
 const CUIABA_VG_CEP_PRESETS: {
   cep: string;
@@ -99,23 +108,27 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
   onClose,
   onSaveProfile,
 }) => {
-  const [mode, setMode] = useState<'register' | 'login'>(
-    profile.isRegistered ? 'register' : 'register'
-  );
+  const initialDocType: DocumentKind =
+    profile.documentType || detectDocumentType(profile.cpfCnpj);
+
+  const [mode, setMode] = useState<'register' | 'login'>('register');
   const [name, setName] = useState(profile.name || '');
   const [phone, setPhone] = useState(
     profile.phone ? formatPhone(profile.phone) : ''
   );
   const [email, setEmail] = useState(profile.email || '');
-  const [cpfCnpj, setCpfCnpj] = useState(profile.cpfCnpj || '');
-  const [cep, setCep] = useState(profile.cep || '78080-000');
+  const [documentType, setDocumentType] = useState<DocumentKind>(initialDocType);
+  const [cpfCnpj, setCpfCnpj] = useState(
+    profile.cpfCnpj ? formatDocumentByType(profile.cpfCnpj, initialDocType) : ''
+  );
+  const [cep, setCep] = useState(formatCep(profile.cep || '78110-400'));
   const [street, setStreet] = useState(profile.street || '');
   const [number, setNumber] = useState(profile.number || '');
   const [neighborhood, setNeighborhood] = useState(
-    profile.neighborhood || 'Coxipó'
+    profile.neighborhood || 'Centro Norte'
   );
   const [city, setCity] = useState<DeliveryCityOption>(
-    profile.city || 'Cuiabá'
+    profile.city || 'Várzea Grande'
   );
   const [interiorCityName, setInteriorCityName] = useState(
     profile.interiorCityName || ''
@@ -126,26 +139,121 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
   );
   const [loginPhone, setLoginPhone] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [cepStatus, setCepStatus] = useState<{
+    type: 'idle' | 'loading' | 'success' | 'error';
+    message?: string;
+  }>({ type: 'idle' });
+  const lastFetchedCepRef = useRef<string>('');
+  const numberInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const nextDocType: DocumentKind =
+      profile.documentType || detectDocumentType(profile.cpfCnpj);
+    setName(profile.name || '');
+    setPhone(profile.phone ? formatPhone(profile.phone) : '');
+    setEmail(profile.email || '');
+    setDocumentType(nextDocType);
+    setCpfCnpj(
+      profile.cpfCnpj ? formatDocumentByType(profile.cpfCnpj, nextDocType) : ''
+    );
+    setCep(formatCep(profile.cep || '78110-400'));
+    setStreet(profile.street || '');
+    setNumber(profile.number || '');
+    setNeighborhood(profile.neighborhood || 'Centro Norte');
+    setCity(profile.city || 'Várzea Grande');
+    setInteriorCityName(profile.interiorCityName || '');
+    setReference(profile.reference || '');
+    setClubDiscountActive(profile.clubDiscountActive !== false);
+    setFeedback(null);
+    setCepStatus({ type: 'idle' });
+    lastFetchedCepRef.current = onlyDigits(profile.cep || '');
+  }, [isOpen, profile]);
 
   if (!isOpen) return null;
+
+  const runCepLookup = async (rawCepValue: string, force = false) => {
+    const digits = onlyDigits(rawCepValue);
+    if (digits.length !== 8) {
+      if (force) {
+        setCepStatus({
+          type: 'error',
+          message: 'Digite os 8 dígitos do CEP para buscar o endereço.',
+        });
+      }
+      return;
+    }
+    if (!force && lastFetchedCepRef.current === digits) return;
+    lastFetchedCepRef.current = digits;
+
+    setCepStatus({ type: 'loading', message: 'Buscando endereço pelo CEP...' });
+    const result = await lookupCepAddress(digits);
+    if (result.found) {
+      setCep(result.cep);
+      if (result.street) setStreet(result.street);
+      if (result.neighborhood) setNeighborhood(result.neighborhood);
+      setCity(result.deliveryCityOption);
+      setInteriorCityName(result.interiorCityName);
+      setCepStatus({
+        type: 'success',
+        message: `Endereço carregado (${result.cep}): ${
+          result.street ? `${result.street}, ` : ''
+        }${result.neighborhood ? `${result.neighborhood} · ` : ''}${result.cityName}/${result.uf}`,
+      });
+      setTimeout(() => numberInputRef.current?.focus(), 60);
+    } else {
+      setCepStatus({
+        type: 'error',
+        message: 'CEP não localizado automaticamente. Confira os números ou preencha manualmente.',
+      });
+    }
+  };
+
+  const handleCepChange = (value: string) => {
+    const masked = formatCep(value);
+    setCep(masked);
+    const digits = onlyDigits(masked);
+    if (digits.length === 8) {
+      void runCepLookup(digits);
+    } else {
+      lastFetchedCepRef.current = '';
+      if (cepStatus.type !== 'idle') setCepStatus({ type: 'idle' });
+    }
+  };
+
+  const handleDocumentTypeSwitch = (nextType: DocumentKind) => {
+    setDocumentType(nextType);
+    setCpfCnpj((prev) => formatDocumentByType(prev, nextType));
+    setFeedback(null);
+  };
+
+  const docDigits = onlyDigits(cpfCnpj);
+  const expectedDocLen = documentType === 'cnpj' ? 14 : 11;
+  const isDocComplete = docDigits.length === expectedDocLen;
+  const isDocValid = isDocComplete && isValidDocument(cpfCnpj, documentType);
 
   const handleQuickLogin = (e: React.FormEvent) => {
     e.preventDefault();
     const digits = normalizePhone(loginPhone);
-    const matchedOrder = existingOrders.find(
-      (o) => normalizePhone(o.customerPhone).includes(digits) && digits.length >= 8
+    if (digits.length < 10) {
+      setFeedback('Informe seu WhatsApp completo com DDD (ex: (65) 99999-9999).');
+      return;
+    }
+    const matchedOrder = existingOrders.find((o) =>
+      matchCustomerPhoneExact(o.customerPhone, digits)
     );
     if (matchedOrder) {
       const updated: CustomerProfile = {
         name: matchedOrder.customerName,
         phone: matchedOrder.customerPhone,
-        email: email || 'cliente@limpermt.com.br',
-        cpfCnpj: cpfCnpj || '000.000.000-00',
-        cep: matchedOrder.address?.cep || '78005-000',
-        street: matchedOrder.address?.street || 'Rua das Palmeiras',
-        number: matchedOrder.address?.number || '120',
+        email: email || '',
+        documentType: matchedOrder.customerDocumentType || 'cpf',
+        cpfCnpj: '',
+        cep: formatCep(matchedOrder.address?.cep || '78110-400'),
+        street: matchedOrder.address?.street || '',
+        number: matchedOrder.address?.number || '',
         neighborhood: matchedOrder.address?.neighborhood || 'Centro',
-        city: matchedOrder.address?.city || 'Cuiabá',
+        city: matchedOrder.address?.city || 'Várzea Grande',
         interiorCityName: matchedOrder.address?.interiorCityName || '',
         reference: matchedOrder.address?.reference || '',
         isRegistered: true,
@@ -155,7 +263,7 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
       onClose();
     } else {
       setFeedback(
-        'Não encontramos pedido anterior com este telefone. Preencha a aba "Criar / Atualizar Cadastro" ao lado.'
+        'Não encontramos pedido anterior com este WhatsApp. Preencha a aba "Criar / Atualizar Cadastro" ao lado.'
       );
     }
   };
@@ -163,11 +271,27 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
   const handleRegisterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim().length < 3) {
-      setFeedback('Informe seu Nome Completo ou Razão Social da Empresa.');
+      setFeedback(
+        documentType === 'cnpj'
+          ? 'Informe a Razão Social ou Nome Fantasia da Empresa.'
+          : 'Informe seu Nome Completo.'
+      );
       return;
     }
     if (normalizePhone(phone).length < 10) {
-      setFeedback('Informe seu WhatsApp com DDD (ex: 65 99999-9999).');
+      setFeedback('Informe seu WhatsApp com DDD (ex: (65) 99999-9999).');
+      return;
+    }
+    if (docDigits.length > 0 && !isValidDocument(cpfCnpj, documentType)) {
+      setFeedback(
+        documentType === 'cnpj'
+          ? 'CNPJ incompleto ou inválido. Preencha os 14 dígitos no formato 00.000.000/0000-00 ou deixe em branco.'
+          : 'CPF incompleto ou inválido. Preencha os 11 dígitos no formato 000.000.000-00 ou deixe em branco.'
+      );
+      return;
+    }
+    if (onlyDigits(cep).length > 0 && onlyDigits(cep).length < 8) {
+      setFeedback('Informe os 8 dígitos do CEP (ex: 78110-400).');
       return;
     }
 
@@ -175,8 +299,9 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
       name: name.trim(),
       phone: normalizePhone(phone),
       email: email.trim(),
-      cpfCnpj: cpfCnpj.trim(),
-      cep: formatCep(cep) || '78080-000',
+      documentType,
+      cpfCnpj: docDigits.length > 0 ? formatDocumentByType(cpfCnpj, documentType) : '',
+      cep: formatCep(cep) || '78110-400',
       street: street.trim(),
       number: number.trim(),
       neighborhood: neighborhood.trim() || 'Centro',
@@ -285,84 +410,155 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
                 />
               </div>
 
-              <div className="p-3.5 rounded-xl bg-[#FDF6E2] border border-[#F3E3B2] text-xs space-y-2">
-                <div className="font-bold text-zinc-900">
-                  Acesso Rápido de Demonstração (1 Clique):
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setLoginPhone('(65) 99999-9999')}
-                    className="px-3 py-1.5 bg-white border border-zinc-300 rounded-lg font-mono text-xs font-bold text-zinc-900 hover:border-[#E3262E] cursor-pointer"
-                  >
-                    João Silva · (65) 99999-9999
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLoginPhone('(65) 99244-1122')}
-                    className="px-3 py-1.5 bg-white border border-zinc-300 rounded-lg font-mono text-xs font-bold text-zinc-900 hover:border-[#E3262E] cursor-pointer"
-                  >
-                    Condomínio Solar · (65) 99244-1122
-                  </button>
-                </div>
-              </div>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Por segurança, seus dados fiscais (CPF/CNPJ) nunca são exibidos automaticamente sem que você informe no cadastro.
+              </p>
 
               <button
                 type="submit"
                 className="w-full py-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-sm rounded-xl cursor-pointer shadow-xs"
               >
-                Acessar Minha Conta & Carregar Endereço
+                Acessar Minha Conta & Meus Pedidos
               </button>
             </form>
           ) : (
             <form onSubmit={handleRegisterSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-zinc-700 mb-1">
-                    Nome Completo ou Empresa *
+                  <label
+                    htmlFor="reg-name"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
+                    {documentType === 'cnpj'
+                      ? 'Razão Social ou Nome da Empresa *'
+                      : 'Nome Completo *'}
                   </label>
                   <input
+                    id="reg-name"
                     type="text"
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Ex: Maria Oliveira / Clínica Vida"
+                    placeholder={
+                      documentType === 'cnpj'
+                        ? 'Ex: Clínica Vida Ltda / Condomínio Solar'
+                        : 'Ex: Maria Oliveira / João Silva'
+                    }
                     className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-zinc-700 mb-1">
+                  <label
+                    htmlFor="reg-phone"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
                     WhatsApp (Celular) *
                   </label>
                   <input
+                    id="reg-phone"
                     type="tel"
+                    inputMode="numeric"
+                    maxLength={15}
                     required
                     value={phone}
                     onChange={(e) => setPhone(formatPhone(e.target.value))}
                     placeholder="(65) 99999-9999"
-                    className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                    className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono tabular-nums focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-zinc-700 mb-1">
-                    CPF ou CNPJ (Para Nota / Desconto Atacado)
-                  </label>
-                  <input
-                    type="text"
-                    value={cpfCnpj}
-                    onChange={(e) => setCpfCnpj(e.target.value)}
-                    placeholder="000.000.000-00 ou CNPJ"
-                    className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono focus:bg-white focus:border-[#FFBE00] focus:outline-none"
-                  />
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <label
+                      htmlFor="reg-document"
+                      className="text-xs font-bold text-zinc-700"
+                    >
+                      {documentType === 'cnpj' ? 'CNPJ da Empresa' : 'CPF do Cliente'}
+                    </label>
+                    <div
+                      role="group"
+                      aria-label="Escolher tipo de documento"
+                      className="inline-flex rounded-lg bg-zinc-100 p-0.5 border border-zinc-200"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleDocumentTypeSwitch('cpf')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                          documentType === 'cpf'
+                            ? 'bg-zinc-950 text-[#FFBE00] shadow-2xs'
+                            : 'text-zinc-600 hover:text-zinc-950'
+                        }`}
+                      >
+                        <User className="w-2.5 h-2.5" />
+                        <span>CPF</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDocumentTypeSwitch('cnpj')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                          documentType === 'cnpj'
+                            ? 'bg-zinc-950 text-[#FFBE00] shadow-2xs'
+                            : 'text-zinc-600 hover:text-zinc-950'
+                        }`}
+                      >
+                        <Building2 className="w-2.5 h-2.5" />
+                        <span>CNPJ</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <input
+                      id="reg-document"
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={documentType === 'cnpj' ? 18 : 14}
+                      value={cpfCnpj}
+                      onChange={(e) =>
+                        setCpfCnpj(formatDocumentByType(e.target.value, documentType))
+                      }
+                      placeholder={
+                        documentType === 'cnpj'
+                          ? '00.000.000/0000-00'
+                          : '000.000.000-00'
+                      }
+                      className={`w-full px-3 py-2 bg-[#FAFAFA] border rounded-xl text-xs font-mono tabular-nums focus:bg-white focus:outline-none ${
+                        isDocComplete
+                          ? isDocValid
+                            ? 'border-emerald-500 focus:border-emerald-600'
+                            : 'border-rose-400 focus:border-rose-500'
+                          : 'border-zinc-300 focus:border-[#FFBE00]'
+                      }`}
+                    />
+                  </div>
+                  {docDigits.length > 0 && (
+                    <span
+                      className={`block mt-1 text-[10px] font-bold ${
+                        isDocComplete
+                          ? isDocValid
+                            ? 'text-emerald-700'
+                            : 'text-rose-600'
+                          : 'text-zinc-500'
+                      }`}
+                    >
+                      {isDocComplete
+                        ? isDocValid
+                          ? `${documentType.toUpperCase()} válido`
+                          : `${documentType.toUpperCase()} inválido — confira os dígitos`
+                        : `${docDigits.length}/${expectedDocLen} dígitos (${documentType.toUpperCase()})`}
+                    </span>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-zinc-700 mb-1">
+                  <label
+                    htmlFor="reg-email"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
                     E-mail
                   </label>
                   <input
+                    id="reg-email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -372,45 +568,137 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-zinc-200">
-                <div className="text-xs font-extrabold text-zinc-900 mb-2">
-                  Endereço Principal & CEP (Para Cálculo de Entrega Expressa)
+              <div className="pt-3 border-t border-zinc-200 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold text-zinc-900">
+                    Endereço Principal & CEP (Preenchimento Automático)
+                  </span>
+                  <span className="text-[10px] font-semibold text-zinc-500">
+                    Digite o CEP primeiro
+                  </span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-                  <div>
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
-                      CEP *
+
+                {/* CEP First with Auto-Lookup */}
+                <div className="p-3 rounded-xl bg-[#FAFAFA] border border-zinc-200 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+                    <div className="flex-1">
+                      <label
+                        htmlFor="reg-cep"
+                        className="block text-xs font-bold text-zinc-800 mb-1"
+                      >
+                        1º Informe seu CEP *
+                      </label>
+                      <input
+                        id="reg-cep"
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={9}
+                        value={cep}
+                        onChange={(e) => handleCepChange(e.target.value)}
+                        placeholder="00000-000"
+                        className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-xl text-xs font-mono font-bold tabular-nums focus:border-[#FFBE00] focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void runCepLookup(cep, true)}
+                      disabled={cepStatus.type === 'loading'}
+                      className="px-3.5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] disabled:opacity-70 text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      {cepStatus.type === 'loading' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Search className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {cepStatus.type === 'loading' ? 'Buscando...' : 'Buscar CEP'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {cepStatus.type !== 'idle' && cepStatus.message && (
+                    <p
+                      role="status"
+                      className={`text-[11px] font-semibold ${
+                        cepStatus.type === 'success'
+                          ? 'text-emerald-700'
+                          : cepStatus.type === 'error'
+                          ? 'text-rose-600'
+                          : 'text-zinc-600'
+                      }`}
+                    >
+                      {cepStatus.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2">
+                    <label
+                      htmlFor="reg-street"
+                      className="block text-xs font-bold text-zinc-700 mb-1"
+                    >
+                      Rua / Avenida
                     </label>
                     <input
+                      id="reg-street"
                       type="text"
-                      value={cep}
-                      onChange={(e) => setCep(formatCep(e.target.value))}
-                      placeholder="78080-000"
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
+                      value={street}
+                      onChange={(e) => setStreet(e.target.value)}
+                      placeholder="Av. Couto Magalhães"
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
+                    <label
+                      htmlFor="reg-number"
+                      className="block text-xs font-bold text-zinc-700 mb-1"
+                    >
+                      Número
+                    </label>
+                    <input
+                      ref={numberInputRef}
+                      id="reg-number"
+                      type="text"
+                      value={number}
+                      onChange={(e) => setNumber(e.target.value)}
+                      placeholder="2480"
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor="reg-neighborhood"
+                      className="block text-xs font-bold text-zinc-700 mb-1"
+                    >
                       Bairro
                     </label>
                     <input
+                      id="reg-neighborhood"
                       type="text"
                       value={neighborhood}
                       onChange={(e) => setNeighborhood(e.target.value)}
-                      placeholder="Coxipó / Centro"
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                      placeholder="Coxipó / Centro Norte"
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
+                    <label
+                      htmlFor="reg-city"
+                      className="block text-xs font-bold text-zinc-700 mb-1"
+                    >
                       Cidade
                     </label>
                     <select
+                      id="reg-city"
                       value={city}
                       onChange={(e) =>
                         setCity(e.target.value as DeliveryCityOption)
                       }
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                     >
                       <option value="Cuiabá">Cuiabá - MT</option>
                       <option value="Várzea Grande">Várzea Grande - MT</option>
@@ -420,46 +708,23 @@ export const CustomerAccountModal: React.FC<CustomerAccountModalProps> = ({
                 </div>
 
                 {city === 'Interior de MT' && (
-                  <div className="mb-3">
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
+                  <div>
+                    <label
+                      htmlFor="reg-interior-city"
+                      className="block text-xs font-bold text-zinc-700 mb-1"
+                    >
                       Qual sua cidade em Mato Grosso?
                     </label>
                     <input
+                      id="reg-interior-city"
                       type="text"
                       value={interiorCityName}
                       onChange={(e) => setInteriorCityName(e.target.value)}
                       placeholder="Ex: Sinop, Sorriso, Rondonópolis, Lucas do Rio Verde..."
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
+                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs focus:bg-white focus:border-[#FFBE00] focus:outline-none"
                     />
                   </div>
                 )}
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
-                      Rua / Avenida
-                    </label>
-                    <input
-                      type="text"
-                      value={street}
-                      onChange={(e) => setStreet(e.target.value)}
-                      placeholder="Av. Fernando Corrêa da Costa"
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
-                      Número
-                    </label>
-                    <input
-                      type="text"
-                      value={number}
-                      onChange={(e) => setNumber(e.target.value)}
-                      placeholder="2480"
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
-                    />
-                  </div>
-                </div>
               </div>
 
               {/* Club Discount Opt-In (Drogasil "Descontos Univers / Stix" Equivalent) */}
@@ -518,16 +783,30 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
   onClose,
   onSaveProfile,
 }) => {
-  const [cepInput, setCepInput] = useState(profile.cep || '78080-000');
+  const [cepInput, setCepInput] = useState(formatCep(profile.cep || '78110-400'));
+  const [streetInput, setStreetInput] = useState(profile.street || '');
   const [selectedNeighborhood, setSelectedNeighborhood] = useState(
-    profile.neighborhood || 'Coxipó'
+    profile.neighborhood || 'Centro Norte'
   );
   const [selectedCity, setSelectedCity] = useState<DeliveryCityOption>(
-    profile.city || 'Cuiabá'
+    profile.city || 'Várzea Grande'
   );
   const [interiorCityName, setInteriorCityName] = useState(
     profile.interiorCityName || ''
   );
+  const [cepLookingUp, setCepLookingUp] = useState(false);
+  const [cepLookupMsg, setCepLookupMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setCepInput(formatCep(profile.cep || '78110-400'));
+    setStreetInput(profile.street || '');
+    setSelectedNeighborhood(profile.neighborhood || 'Centro Norte');
+    setSelectedCity(profile.city || 'Várzea Grande');
+    setInteriorCityName(profile.interiorCityName || '');
+    setCepLookupMsg(null);
+    setCepLookingUp(false);
+  }, [isOpen, profile]);
 
   if (!isOpen) return null;
 
@@ -537,11 +816,32 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
   );
   const currentFee = matchedFeeObj ? matchedFeeObj.fee : settings.defaultDeliveryFee;
 
+  const triggerCepModalLookup = async (digits: string) => {
+    if (digits.length !== 8) return;
+    setCepLookingUp(true);
+    setCepLookupMsg(null);
+    const res = await lookupCepAddress(digits);
+    setCepLookingUp(false);
+    if (res.found) {
+      setCepInput(res.cep);
+      if (res.street) setStreetInput(res.street);
+      if (res.neighborhood) setSelectedNeighborhood(res.neighborhood);
+      setSelectedCity(res.deliveryCityOption);
+      setInteriorCityName(res.interiorCityName);
+      setCepLookupMsg(
+        `Localizado: ${res.street ? `${res.street}, ` : ''}${res.neighborhood || res.cityName} (${res.cityName}/${res.uf})`
+      );
+    } else {
+      setCepLookupMsg('CEP não encontrado automaticamente. Selecione o bairro ao lado.');
+    }
+  };
+
   const handleApplyCep = (e: React.FormEvent) => {
     e.preventDefault();
     onSaveProfile({
       ...profile,
-      cep: formatCep(cepInput) || '78080-000',
+      cep: formatCep(cepInput) || '78110-400',
+      street: streetInput.trim() || profile.street,
       neighborhood:
         selectedCity === 'Interior de MT'
           ? interiorCityName.trim() || 'Interior de MT'
@@ -580,21 +880,45 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
 
         <form onSubmit={handleApplyCep} className="p-6 space-y-4">
           <p className="text-xs text-zinc-600 leading-relaxed">
-            Informe seu CEP em <strong>Cuiabá ou Várzea Grande</strong> para verificar estoque imediato de galões 5L, prazo de entrega rápida e retirada em 15 minutos:
+            Informe seu CEP em <strong>Cuiabá ou Várzea Grande</strong> para carregar o endereço automaticamente, verificar estoque de galões 5L e consultar prazo de entrega:
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-zinc-800 mb-1">
+              <label htmlFor="modal-cep-input" className="block text-xs font-bold text-zinc-800 mb-1">
                 Digite seu CEP
               </label>
-              <input
-                type="text"
-                value={cepInput}
-                onChange={(e) => setCepInput(formatCep(e.target.value))}
-                placeholder="78080-000"
-                className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono font-bold text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
-              />
+              <div className="relative flex items-center gap-1.5">
+                <input
+                  id="modal-cep-input"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={9}
+                  value={cepInput}
+                  onChange={(e) => {
+                    const masked = formatCep(e.target.value);
+                    setCepInput(masked);
+                    const digits = onlyDigits(masked);
+                    if (digits.length === 8) {
+                      void triggerCepModalLookup(digits);
+                    }
+                  }}
+                  placeholder="00000-000"
+                  className="w-full px-3 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono font-bold tabular-nums text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => void triggerCepModalLookup(onlyDigits(cepInput))}
+                  aria-label="Buscar endereço pelo CEP"
+                  className="p-2.5 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 shrink-0 cursor-pointer"
+                >
+                  {cepLookingUp ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
             </div>
 
             <div>
@@ -616,6 +940,15 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
                 }}
                 className="w-full px-3 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-900"
               >
+                {selectedCity !== 'Interior de MT' &&
+                  selectedNeighborhood &&
+                  !settings.neighborhoodFees.some(
+                    (nb) => nb.name.toLowerCase() === selectedNeighborhood.toLowerCase()
+                  ) && (
+                    <option value={selectedNeighborhood}>
+                      {selectedNeighborhood} ({selectedCity})
+                    </option>
+                  )}
                 {settings.neighborhoodFees.map((nb) => (
                   <option key={nb.id} value={nb.name}>
                     {nb.name} ({nb.city})
@@ -625,6 +958,15 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
               </select>
             </div>
           </div>
+
+          {cepLookupMsg && (
+            <p
+              role="status"
+              className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2"
+            >
+              {cepLookupMsg}
+            </p>
+          )}
 
           {selectedCity === 'Interior de MT' && (
             <div>
@@ -653,8 +995,12 @@ export const CepLocationModal: React.FC<CepLocationModalProps> = ({
                   type="button"
                   onClick={() => {
                     setCepInput(preset.cep);
+                    setStreetInput(preset.streetHint);
                     setSelectedNeighborhood(preset.neighborhood);
                     setSelectedCity(preset.city);
+                    setCepLookupMsg(
+                      `Localizado: ${preset.streetHint} · ${preset.neighborhood} (${preset.city}/MT)`
+                    );
                   }}
                   className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
                     selectedNeighborhood === preset.neighborhood

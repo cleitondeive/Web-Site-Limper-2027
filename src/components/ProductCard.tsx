@@ -3,10 +3,10 @@ import {
   ArrowDown,
   Eye,
   Heart,
+  MessageCircle,
   Minus,
   Plus,
   ShoppingCart,
-  Sparkles,
   Star,
   X,
   Zap,
@@ -19,6 +19,7 @@ import {
   getPricePerLiterLabel,
   getProductInstallmentMeta,
   isProductPriceVisible,
+  resolveProductBadgeStyle,
 } from '../utils/commerce';
 import { ProductImageWithFallback } from './CategoryIcon';
 
@@ -63,6 +64,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const installment = getProductInstallmentMeta(product, settings);
   const wholesaleUnitPrice = +(effectivePrice * 0.94).toFixed(2);
   const reviewCount = getDeterministicReviewCount(product.id);
+  const promoBadgeStyle = resolveProductBadgeStyle(product.badgeColor, 'promo');
+  const highlightBadgeStyle = resolveProductBadgeStyle(
+    product.subBadgeColor,
+    'highlight'
+  );
 
   return (
     <article className="group h-full bg-white rounded-2xl border border-zinc-200/90 hover:border-[#FFBE00] overflow-hidden flex flex-col justify-between transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
@@ -83,9 +89,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             />
           </button>
 
-          {/* Top-Left Circular Yellow Discount Badge (Todimo style: "22% OFF") */}
+          {/* Top-Left Circular Discount Badge (matches chosen promo badge color) */}
           {priceVisible && discountPct > 0 && !isOutOfStock && (
-            <div className="absolute top-2 left-2 sm:top-2.5 sm:left-2.5 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E5B800] text-zinc-950 font-mono font-extrabold text-[10px] sm:text-[11px] leading-none flex flex-col items-center justify-center shadow-xs border border-white">
+            <div
+              className="absolute top-2 left-2 sm:top-2.5 sm:left-2.5 w-9 h-9 sm:w-10 sm:h-10 rounded-full font-mono font-extrabold text-[10px] sm:text-[11px] leading-none flex flex-col items-center justify-center shadow-xs border border-white"
+              style={{
+                backgroundColor: promoBadgeStyle.backgroundColor,
+                color: promoBadgeStyle.color,
+              }}
+            >
               <span>{discountPct}%</span>
               <span className="text-[8px] font-black tracking-tight mt-0.5">OFF</span>
             </div>
@@ -175,11 +187,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           {/* Single Clean Highlight Tag (Mercado Livre "MAIS VENDIDO" / Todimo "Preço Exclusivo Site") */}
           <div>
             {priceVisible && discountPct > 0 ? (
-              <div className="inline-block max-w-full py-0.5 px-2 rounded bg-[#E5B800] text-zinc-950 text-[9px] sm:text-[10px] font-extrabold truncate">
+              <div
+                className="inline-block max-w-full py-0.5 px-2 rounded text-[9px] sm:text-[10px] font-extrabold truncate"
+                style={{
+                  backgroundColor: promoBadgeStyle.backgroundColor,
+                  color: promoBadgeStyle.color,
+                }}
+              >
                 {product.badgeLabel || 'Preço Exclusivo Site | Limper MT'}
               </div>
             ) : (
-              <div className="inline-block max-w-full py-0.5 px-2 rounded bg-[#FF6B00] text-white text-[9px] sm:text-[10px] font-extrabold uppercase tracking-tight truncate">
+              <div
+                className="inline-block max-w-full py-0.5 px-2 rounded text-[9px] sm:text-[10px] font-extrabold uppercase tracking-tight truncate"
+                style={{
+                  backgroundColor: highlightBadgeStyle.backgroundColor,
+                  color: highlightBadgeStyle.color,
+                }}
+              >
                 {product.subBadgeLabel || `MAIS VENDIDO · ${category?.shortName || 'Quimiprol'}`}
               </div>
             )}
@@ -284,20 +308,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </div>
           </div>
         ) : (
-          <div className="py-1 space-y-0.5">
-            <div className="text-[9px] sm:text-[10px] font-mono uppercase tracking-wider text-[#E3262E] font-bold truncate">
-              Atacado & Varejo
+          <div className="py-1 space-y-1.5">
+            <div className="text-[10px] sm:text-[11px] font-bold text-[#B45309] leading-snug truncate">
+              {product.dilutionHint || 'Linha Profissional Quimiprol'}
             </div>
-            <div className="text-xs sm:text-sm font-display font-extrabold text-zinc-900">
-              Valor sob consulta
-            </div>
-            <div className="text-[10px] text-zinc-500 truncate">
-              Envie na lista pelo WhatsApp
+            <div className="px-2 py-1.5 rounded-lg bg-[#ECFDF5] border border-emerald-200/90 flex items-center gap-1.5 text-emerald-950">
+              <MessageCircle className="w-3.5 h-3.5 text-[#16A34A] shrink-0" />
+              <span className="text-[10.5px] sm:text-[11.5px] font-extrabold leading-tight">
+                Envie na lista pelo WhatsApp
+              </span>
             </div>
             <div className="flex items-center gap-1 text-[10px] font-extrabold text-[#00A650] pt-0.5 truncate">
               <Zap className="w-3 h-3 fill-[#00A650] shrink-0" />
               <span className="truncate">
-                {customerCep ? 'Retirada 15min ou Delivery' : 'Retirada ⚡ 15 MIN'}
+                {customerCep ? 'Retirada Grátis 15min ou Delivery' : 'Retirada Grátis ⚡ 15 MIN'}
               </span>
             </div>
           </div>
@@ -382,6 +406,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const discountPct = getDiscountPercentage(product);
   const pricePerLiter = getPricePerLiterLabel(product);
   const installment = getProductInstallmentMeta(product, settings);
+  const promoBadgeStyle = resolveProductBadgeStyle(product.badgeColor, 'promo');
 
   return (
     <div
@@ -399,7 +424,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             className="w-full h-full object-cover"
           />
           {priceVisible && discountPct > 0 && (
-            <div className="absolute top-3 left-3 w-12 h-12 rounded-full bg-[#E5B800] text-zinc-950 font-mono font-extrabold text-xs leading-tight flex flex-col items-center justify-center shadow-xs">
+            <div
+              className="absolute top-3 left-3 w-12 h-12 rounded-full font-mono font-extrabold text-xs leading-tight flex flex-col items-center justify-center shadow-xs border border-white"
+              style={{
+                backgroundColor: promoBadgeStyle.backgroundColor,
+                color: promoBadgeStyle.color,
+              }}
+            >
               <span>{discountPct}%</span>
               <span className="text-[9px] font-black">OFF</span>
             </div>
@@ -483,12 +514,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   </div>
                 </>
               ) : (
-                <div>
-                  <div className="text-xs font-mono font-bold text-[#E3262E] uppercase">
-                    Lista Sem Valor · Cotação Personalizada
+                <div className="p-3 rounded-xl bg-[#ECFDF5] border border-emerald-200 space-y-1">
+                  <div className="text-[10px] font-mono font-extrabold text-emerald-800 uppercase tracking-wide">
+                    Orçamento Personalizado · Quimiprol Oficial
                   </div>
-                  <div className="text-xl font-display font-extrabold text-zinc-900">
-                    Valor sob consulta no WhatsApp
+                  <div className="flex items-center gap-2 text-sm sm:text-base font-display font-extrabold text-emerald-950">
+                    <MessageCircle className="w-4 h-4 text-[#16A34A] shrink-0" />
+                    <span>Envie na lista pelo WhatsApp</span>
                   </div>
                 </div>
               )}
@@ -515,30 +547,17 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onAdd(product);
-                    onClose();
-                  }}
-                  className="py-3 px-3 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <ShoppingCart className="w-4 h-4" />
-                  <span>{priceVisible ? 'Adicionar 1 un.' : 'Incluir na Lista'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdateQuantity(product.id, 3);
-                    onClose();
-                  }}
-                  className="py-3 px-3 bg-[#FFFBEB] hover:bg-[#FEF3C7] border border-[#FFBE00] text-zinc-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Sparkles className="w-4 h-4 text-[#E3262E]" />
-                  <span>Lote Atacado (3 un.)</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onAdd(product);
+                  onClose();
+                }}
+                className="w-full py-3.5 px-4 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-colors"
+              >
+                <ShoppingCart className="w-4 h-4" />
+                <span>{priceVisible ? 'Adicionar à Cesta' : 'Incluir na Lista'}</span>
+              </button>
             )}
           </div>
         </div>

@@ -961,35 +961,41 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
         </div>
       )}
 
-      {/* 4. iFood / 99 Style Live Order Mini-Radar Strip */}
+      {/* 4. Logged-in Customer Active Order Strip */}
       {latestActiveOrder && (() => {
         const meta = getOrderStageMeta(
           latestActiveOrder.status,
           latestActiveOrder.deliveryType
         );
         const currentStep = meta.step;
+        const isPickup = latestActiveOrder.deliveryType === 'pickup';
         return (
-          <div className="rounded-2xl bg-white border border-zinc-200/90 px-3.5 sm:px-5 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-2xs">
-            <div className="flex items-start sm:items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] text-[#E3262E] flex items-center justify-center shrink-0">
-                <PackageCheck className="w-4 h-4" />
+          <div className="rounded-2xl bg-white border border-zinc-200 px-4 sm:px-5 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs">
+            <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] text-[#E3262E] flex items-center justify-center shrink-0">
+                <PackageCheck className="w-5 h-5" />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="px-2 py-0.5 rounded bg-zinc-950 text-[#FFBE00] font-mono text-[10px] font-extrabold uppercase">
-                    {latestActiveOrder.deliveryType === 'pickup'
-                      ? `RETIRADA NA LOJA · ${latestActiveOrder.id}`
-                      : `RASTREIO DELIVERY · ${latestActiveOrder.id}`}
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
+                  <span className="font-bold text-zinc-950 tabular-nums">
+                    {latestActiveOrder.id}
                   </span>
-                  <span className="font-extrabold text-zinc-900">
-                    {meta.cleaningStageTitle}
+                  <span aria-hidden="true" className="text-zinc-300">
+                    ·
                   </span>
-                  <span className="font-mono text-[11px] font-bold text-emerald-700">
-                    · {meta.etaBadge}
+                  <span className="font-semibold text-zinc-900">
+                    {meta.cleaningStageTitle.replace(/^\d+\.\s*/, '')}
+                  </span>
+                  <span aria-hidden="true" className="text-zinc-300">
+                    ·
+                  </span>
+                  <span className="text-[13px] font-medium text-emerald-700">
+                    {meta.etaBadge}
                   </span>
                 </div>
-                {/* 4-Bar iFood Progress Indicator */}
-                <div className="grid grid-cols-4 gap-1.5 max-w-xs mt-1.5">
+
+                {/* Clean 4-Step Progress Indicator */}
+                <div className="grid grid-cols-4 gap-1.5 max-w-xs">
                   {[1, 2, 3, 4].map((step) => (
                     <div
                       key={`mini-step-${step}`}
@@ -1006,21 +1012,22 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="hidden sm:inline-block px-2.5 py-1 rounded-lg bg-[#FAFAFA] border border-zinc-200 font-mono text-[11px] font-extrabold text-zinc-800">
-                Senha: {latestActiveOrder.pickupCode || latestActiveOrder.id}
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <span className="inline-flex items-center px-3 py-1.5 rounded-xl bg-zinc-100 text-zinc-800 text-[13px] font-semibold tabular-nums">
+                {isPickup ? 'Senha:' : 'PIN:'}{' '}
+                <strong className="font-mono font-bold text-zinc-950 ml-1">
+                  {latestActiveOrder.pickupCode || latestActiveOrder.id}
+                </strong>
               </span>
               <button
                 type="button"
                 onClick={onOpenRepeatOrders}
-                className="px-3.5 py-2 rounded-xl bg-[#E3262E] hover:bg-[#C81E25] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#E3262E] hover:bg-[#C81E25] text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
               >
                 <span>
-                  {latestActiveOrder.deliveryType === 'pickup'
-                    ? 'Ver Senha & Ir Buscar'
-                    : 'Abrir Radar do Pedido'}
+                  {isPickup ? 'Ver senha e retirar' : 'Acompanhar pedido'}
                 </span>
-                <ChevronRight className="w-3.5 h-3.5" />
+                <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           </div>

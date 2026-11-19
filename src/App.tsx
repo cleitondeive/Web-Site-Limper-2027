@@ -13,6 +13,7 @@ import {
   Gift,
   History,
   Home as HomeIcon,
+  Lock,
   MapPin,
   Menu,
   MessageCircle,
@@ -29,35 +30,47 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AdminUser,
   CartItem,
   CatalogSortOption,
   Category,
+  CreateSecurityAuditEventInput,
   CustomerProfile,
   Order,
   Product,
   PromoBanner,
   PromoCoupon,
   PromoKit,
+  SecurityAuditEvent,
+  SiteBackupSnapshot,
   StoreSettings,
   VolumeFilterOption,
 } from './types/commerce';
 import {
   addToCart,
+  appendSecurityAuditEvent,
   buildKitCartProduct,
   buildLogisticsWhatsAppConsultUrl,
   calculateCartTotals,
   calculateKitPricing,
   filterProducts,
+  findOrderForPrivateLookup,
   formatCurrency,
+  getCustomerAddresses,
+  getCustomerLatestActiveOrder,
   getEffectivePrice,
   getLogisticsSettings,
-  getOrderStageMeta,
   isCatalogAllPricesHidden,
+  isCustomerLoggedIn,
+  matchCustomerPhoneExact,
   mergeOrderIntoCart,
-  transitionOrderStatus,
+  normalizeOrderCode,
+  resolveCustomerVisibleOrders,
+  syncProfilePrimaryAddress,
   updateCartQuantity,
+  upsertCustomerAddress,
 } from './utils/commerce';
-import { storageService } from './utils/storage';
+import { DEFAULT_CUSTOMER_PROFILE, storageService } from './utils/storage';
 import { GENERATED_IMAGES, LIMPER_LOGO_URL } from './data/initialCatalog';
 import { ProductImageWithFallback } from './components/CategoryIcon';
 import { ActiveView, Header } from './components/Header';
@@ -77,6 +90,12 @@ import {
   CustomerAccountModal,
   QuickOrderListModal,
 } from './components/CustomerModals';
+import {
+  CustomerAreaSection,
+  CustomerAreaView,
+  CustomerQuickDrawer,
+  OrderTrackQuickDrawer,
+} from './components/CustomerArea';
 
 export default function App() {
   const [categories, setCategories] = useState<Category[]>(() =>
@@ -109,10 +128,41 @@ export default function App() {
   const [favorites, setFavorites] = useState<string[]>(() =>
     storageService.getFavorites()
   );
+  const [securityLogs, setSecurityLogs] = useState<SecurityAuditEvent[]>(() =>
+    storageService.getSecurityLogs()
+  );
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>(() =>
+    storageService.getAdminUsers()
+  );
+  const [siteBackups, setSiteBackups] = useState<SiteBackupSnapshot[]>(() =>
+    storageService.getSiteBackups()
+  );
   const [activeCouponCode, setActiveCouponCode] = useState<string>('');
 
-  // Navigation & Filter States
-  const [activeView, setActiveView] = useState<ActiveView>('store');
+  useEffect(() => {
+    let active = true;
+    storageService.loadSiteBackupsFromIndexedDB().then((fromIdb) => {
+      if (!active || !fromIdb) return;
+      setSiteBackups((prev) => (fromIdb.length > prev.length ? fromIdb : prev));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Navigation & Filter States (Admin only reachable via private URL #admin / ?admin=1 / /admin)
+  const isPrivateAdminRoute = () => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.pathname.endsWith('/admin') ||
+      window.location.hash === '#admin' ||
+      new URLSearchParams(window.location.search).get('admin') === '1'
+    );
+  };
+
+  const [activeView, setActiveView] = useState<ActiveView>(() =>
+    isPrivateAdminRoute() ? 'admin' : 'store'
+  );
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyOffers, setOnlyOffers] = useState(false);
@@ -124,6 +174,20 @@ export default function App() {
   // Modals & Drawers
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [isAccountDrawerOpen, setIsAccountDrawerOpen] = useState(false);
+  const [isOrderTrackDrawerOpen, setIsOrderTrackDrawerOpen] = useState(false);
+  const [pendingOrdersRedirectAfterLogin, setPendingOrdersRedirectAfterLogin] =
+    useState(false);
+  const [sessionOrderIds, setSessionOrderIds] = useState<string[]>([]);
+  const [verifiedGuestLookup, setVerifiedGuestLookup] = useState<{
+    orderId: string;
+    phone: string;
+  } | null>(null);
+  const [customerAreaSection, setCustomerAreaSection] =
+    useState<CustomerAreaSection>('summary');
+  const [customerSelectedOrderId, setCustomerSelectedOrderId] = useState<
+    string | null
+  >(null);
   const [isCepModalOpen, setIsCepModalOpen] = useState(false);
   const [isQuickOrderModalOpen, setIsQuickOrderModalOpen] = useState(false);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
@@ -131,6 +195,20 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([]);
   const [showScrollTop, setShowScrollTop] = useState(false);
+
+  useEffect(() => {
+    const syncAdminRoute = () => {
+      if (isPrivateAdminRoute()) {
+        setActiveView('admin');
+      }
+    };
+    window.addEventListener('hashchange', syncAdminRoute);
+    window.addEventListener('popstate', syncAdminRoute);
+    return () => {
+      window.removeEventListener('hashchange', syncAdminRoute);
+      window.removeEventListener('popstate', syncAdminRoute);
+    };
+  }, []);
 
   useEffect(() => {
     storageService.saveCart(cart);
@@ -171,6 +249,9 @@ export default function App() {
           volumeFilter !== 'all' ||
           sortBy !== 'featured'
       );
+    if (typeof window !== 'undefined' && isPrivateAdminRoute()) {
+      window.history.replaceState(null, '', '/');
+    }
     setActiveView('store');
     setSelectedCategoryId(null);
     setSearchQuery('');
@@ -191,6 +272,22 @@ export default function App() {
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 3000);
+  };
+
+  const recordSecurityEvent = React.useCallback(
+    (input: CreateSecurityAuditEventInput) => {
+      setSecurityLogs((prev) => {
+        const next = appendSecurityAuditEvent(prev, input);
+        storageService.saveSecurityLogs(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleClearSecurityLogs = () => {
+    setSecurityLogs([]);
+    storageService.saveSecurityLogs([]);
   };
 
   const handleSaveCategories = (updated: Category[]) => {
@@ -228,9 +325,95 @@ export default function App() {
     storageService.saveSettings(updated);
   };
 
+  const handleSaveAdminUsers = (updated: AdminUser[]) => {
+    setAdminUsers(updated);
+    storageService.saveAdminUsers(updated);
+  };
+
+  const handleSaveSiteBackups = (updated: SiteBackupSnapshot[]) => {
+    setSiteBackups(updated);
+    storageService.saveSiteBackups(updated);
+  };
+
+  const handleRestoreSiteBackup = (snapshot: SiteBackupSnapshot) => {
+    const p = snapshot.payload;
+    handleSaveCategories(p.categories);
+    handleSaveProducts(p.products);
+    handleSaveKits(p.kits);
+    handleSaveCoupons(p.coupons);
+    handleSaveBanners(p.banners);
+    handleSaveOrders(p.orders);
+    handleSaveSettings(p.settings);
+    if (
+      Array.isArray(p.adminUsers) &&
+      p.adminUsers.some((u) => u.role === 'master' && u.active)
+    ) {
+      handleSaveAdminUsers(p.adminUsers);
+    }
+  };
+
   const handleSaveCustomerProfile = (profile: CustomerProfile) => {
-    setCustomerProfile(profile);
-    storageService.saveCustomerProfile(profile);
+    const normalizedAddresses = getCustomerAddresses(profile);
+    const synced =
+      normalizedAddresses.length > 0
+        ? syncProfilePrimaryAddress(profile, normalizedAddresses)
+        : profile;
+
+    const phoneChanged =
+      Boolean(customerProfile.phone) &&
+      !matchCustomerPhoneExact(customerProfile.phone, synced.phone);
+    if (phoneChanged || isCustomerLoggedIn(synced)) {
+      setVerifiedGuestLookup(null);
+    }
+    if (phoneChanged) {
+      setSessionOrderIds([]);
+    }
+
+    if (isCustomerLoggedIn(synced)) {
+      recordSecurityEvent({
+        category: 'customer_auth',
+        outcome: 'allowed',
+        actorLabel: synced.name || 'Cliente',
+        rawTarget: synced.phone,
+        summary: 'Sessão de cliente autenticada no rastreio exclusivo',
+        detail:
+          'Acesso aos pedidos filtrado exclusivamente para o telefone titular identificado.',
+      });
+    }
+
+    setCustomerProfile(synced);
+    storageService.saveCustomerProfile(synced);
+  };
+
+  const handleLogoutCustomer = () => {
+    if (isCustomerLoggedIn(customerProfile)) {
+      recordSecurityEvent({
+        category: 'customer_auth',
+        outcome: 'info',
+        actorLabel: customerProfile.name || 'Cliente',
+        rawTarget: customerProfile.phone,
+        summary: 'Sessão do cliente encerrada com limpeza de escopo',
+        detail:
+          'Dados de sessão e consultas temporárias removidos para impedir acesso cruzado no mesmo dispositivo.',
+      });
+    }
+    setCustomerProfile(DEFAULT_CUSTOMER_PROFILE);
+    storageService.saveCustomerProfile(DEFAULT_CUSTOMER_PROFILE);
+    setVerifiedGuestLookup(null);
+    setSessionOrderIds([]);
+    setCustomerSelectedOrderId(null);
+    setIsAccountDrawerOpen(false);
+    if (activeView === 'account' || activeView === 'orders') {
+      setActiveView('store');
+    }
+    showToast('Você saiu da sua conta. Entre novamente quando quiser.');
+  };
+
+  const handleRateOrder = (orderId: string, rating: number) => {
+    const updated = orders.map((o) =>
+      o.id === orderId ? { ...o, customerRating: rating } : o
+    );
+    handleSaveOrders(updated);
   };
 
   const handleToggleFavorite = (productId: string) => {
@@ -298,6 +481,18 @@ export default function App() {
   const handleCompleteOrder = (newOrder: Order) => {
     const updatedOrders = [newOrder, ...orders];
     handleSaveOrders(updatedOrders);
+    setSessionOrderIds((prev) =>
+      prev.includes(newOrder.id) ? prev : [newOrder.id, ...prev]
+    );
+    recordSecurityEvent({
+      category: 'order_security',
+      outcome: 'info',
+      actorLabel: newOrder.customerName || 'Cliente',
+      rawTarget: newOrder.customerPhone,
+      orderId: newOrder.id,
+      summary: `Pedido ${newOrder.id} registrado com isolamento por titular`,
+      detail: 'Rastreio vinculado exclusivamente ao WhatsApp do comprador e à sessão atual.',
+    });
     setCart([]);
     setIsCartOpen(false);
     setConfirmedOrder(newOrder);
@@ -362,9 +557,16 @@ export default function App() {
 
   const allCatalogPricesHidden = isCatalogAllPricesHidden(products, settings, kits);
 
+  const customerLoggedIn = isCustomerLoggedIn(customerProfile);
+  const customerScopedOrders = resolveCustomerVisibleOrders({
+    orders,
+    customerProfile,
+    sessionOrderIds,
+    verifiedLookup: verifiedGuestLookup,
+  });
+
   const selectedCategoryObj = categories.find((c) => c.id === selectedCategoryId);
-  const latestActiveOrder =
-    orders.find((o) => o.status !== 'completed') || orders[0];
+  const latestActiveOrder = getCustomerLatestActiveOrder(orders, customerProfile);
 
   const hasActiveFilters = Boolean(
     selectedCategoryId ||
@@ -377,84 +579,89 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FAFAFA] text-zinc-900">
-      {/* 1. 3-Tier Drogasil + Todimo Header with Live Photo Search */}
-      <Header
-        activeView={activeView}
-        onlyOffers={onlyOffers}
-        hasActiveFilters={hasActiveFilters}
-        isMegaMenuOpen={isMegaMenuOpen}
-        products={products}
-        categories={categories}
-        cartItemCount={cartTotals.itemCount}
-        cartSubtotal={cartTotals.subtotal}
-        isCartQuoteOnly={cartTotals.isQuoteOnly}
-        ordersCount={orders.length}
-        hideAllPrices={allCatalogPricesHidden}
-        customerProfile={customerProfile}
-        searchQuery={searchQuery}
-        onSearchChange={(q) => {
-          setSearchQuery(q);
-          if (activeView !== 'store') setActiveView('store');
-        }}
-        onSelectProduct={(prod) => {
-          setActiveView('store');
-          handleOpenProductDetail(prod);
-        }}
-        onAddToCart={handleAddToCart}
-        onSelectStore={handleGoHome}
-        onToggleMegaMenu={() => setIsMegaMenuOpen((prev) => !prev)}
-        onSelectOffers={() => {
-          setActiveView('store');
-          setOnlyOffers((prev) => !prev);
-          setOnlyFavorites(false);
-          setIsMegaMenuOpen(false);
-        }}
-        onSelectOrders={() => {
-          setActiveView('orders');
-          setIsMegaMenuOpen(false);
-        }}
-        onSelectAdmin={() => {
-          setActiveView('admin');
-          setIsMegaMenuOpen(false);
-        }}
-        onOpenCart={() => {
-          setIsMegaMenuOpen(false);
-          setIsCartOpen(true);
-        }}
-        onOpenAccountModal={() => {
-          setIsMegaMenuOpen(false);
-          setIsAccountModalOpen(true);
-        }}
-        onOpenCepModal={() => {
-          setIsMegaMenuOpen(false);
-          setIsCepModalOpen(true);
-        }}
-        onOpenQuickOrderModal={() => {
-          setIsMegaMenuOpen(false);
-          setIsQuickOrderModalOpen(true);
-        }}
-      />
+      {/* 1. 3-Tier Storefront Header & MegaMenu (hidden inside dedicated Admin Area) */}
+      {activeView !== 'admin' && (
+        <>
+          <Header
+            activeView={activeView}
+            onlyOffers={onlyOffers}
+            hasActiveFilters={hasActiveFilters}
+            isMegaMenuOpen={isMegaMenuOpen}
+            products={products}
+            categories={categories}
+            cartItemCount={cartTotals.itemCount}
+            cartSubtotal={cartTotals.subtotal}
+            isCartQuoteOnly={cartTotals.isQuoteOnly}
+            ordersCount={customerLoggedIn ? customerScopedOrders.length : 0}
+            hideAllPrices={allCatalogPricesHidden}
+            customerProfile={customerProfile}
+            searchQuery={searchQuery}
+            onSearchChange={(q) => {
+              setSearchQuery(q);
+              if (activeView !== 'store') setActiveView('store');
+            }}
+            onSelectProduct={(prod) => {
+              setActiveView('store');
+              handleOpenProductDetail(prod);
+            }}
+            onAddToCart={handleAddToCart}
+            onSelectStore={handleGoHome}
+            onToggleMegaMenu={() => setIsMegaMenuOpen((prev) => !prev)}
+            onSelectOffers={() => {
+              setActiveView('store');
+              setOnlyOffers((prev) => !prev);
+              setOnlyFavorites(false);
+              setIsMegaMenuOpen(false);
+            }}
+            onSelectOrders={() => {
+              setIsMegaMenuOpen(false);
+              setIsOrderTrackDrawerOpen(true);
+            }}
+            onOpenCart={() => {
+              setIsMegaMenuOpen(false);
+              setIsCartOpen(true);
+            }}
+            onOpenAccountModal={() => {
+              setIsMegaMenuOpen(false);
+              setPendingOrdersRedirectAfterLogin(false);
+              if (isCustomerLoggedIn(customerProfile)) {
+                setIsAccountDrawerOpen(true);
+              } else {
+                setIsAccountModalOpen(true);
+              }
+            }}
+            onOpenCepModal={() => {
+              setIsMegaMenuOpen(false);
+              setIsCepModalOpen(true);
+            }}
+            onOpenQuickOrderModal={() => {
+              setIsMegaMenuOpen(false);
+              setIsQuickOrderModalOpen(true);
+            }}
+          />
 
-      {/* Quimiprol Multi-Column MegaMenu Overlay */}
-      <MegaMenu
-        isOpen={isMegaMenuOpen}
-        categories={categories}
-        products={products}
-        onClose={() => setIsMegaMenuOpen(false)}
-        onSelectCategory={(catId) => {
-          setActiveView('store');
-          setSelectedCategoryId(catId);
-          setOnlyOffers(false);
-          setOnlyFavorites(false);
-          setTimeout(() => {
-            document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' });
-          }, 50);
-        }}
-        onSelectProduct={(prod) => {
-          setActiveView('store');
-          handleOpenProductDetail(prod);
-        }}
-      />
+          {/* Quimiprol Multi-Column MegaMenu Overlay */}
+          <MegaMenu
+            isOpen={isMegaMenuOpen}
+            categories={categories}
+            products={products}
+            onClose={() => setIsMegaMenuOpen(false)}
+            onSelectCategory={(catId) => {
+              setActiveView('store');
+              setSelectedCategoryId(catId);
+              setOnlyOffers(false);
+              setOnlyFavorites(false);
+              setTimeout(() => {
+                document.getElementById('catalogo')?.scrollIntoView({ behavior: 'smooth' });
+              }, 50);
+            }}
+            onSelectProduct={(prod) => {
+              setActiveView('store');
+              handleOpenProductDetail(prod);
+            }}
+          />
+        </>
+      )}
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (
@@ -469,7 +676,11 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className={`flex-1 pb-24 md:pb-12 ${confirmedOrder ? 'no-print' : ''}`}>
+      <main
+        className={`flex-1 ${
+          activeView === 'admin' ? 'bg-[#F4F5F7]' : 'pb-24 md:pb-12'
+        } ${confirmedOrder ? 'no-print' : ''}`}
+      >
         {activeView === 'store' && (
           <>
             {/* Section 1: Light Smart Solutions Bar + Auto-Rotating Promotional Banner Carousel */}
@@ -496,7 +707,15 @@ export default function App() {
                 setOnlyOffers(true);
                 setOnlyFavorites(false);
               }}
-              onOpenRepeatOrders={() => setActiveView('orders')}
+              onOpenRepeatOrders={() => {
+                if (isCustomerLoggedIn(customerProfile)) {
+                  setCustomerAreaSection('orders');
+                  setCustomerSelectedOrderId(latestActiveOrder?.id || null);
+                  setActiveView('account');
+                } else {
+                  setIsOrderTrackDrawerOpen(true);
+                }
+              }}
               onOpenQuickOrderModal={() => setIsQuickOrderModalOpen(true)}
               onOpenCepModal={() => setIsCepModalOpen(true)}
               onSelectProduct={(prod) => handleOpenProductDetail(prod)}
@@ -1240,7 +1459,7 @@ export default function App() {
 
                 <button
                   type="button"
-                  onClick={() => setActiveView('orders')}
+                  onClick={() => setIsCepModalOpen(true)}
                   className="bg-white hover:bg-[#FFFBEB] text-zinc-900 border border-zinc-200/90 hover:border-[#FFBE00] rounded-2xl p-4 flex items-center gap-3.5 text-left transition-all hover:-translate-y-0.5 cursor-pointer shadow-2xs"
                 >
                   <div className="w-11 h-11 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0">
@@ -1606,25 +1825,88 @@ export default function App() {
 
         {activeView === 'orders' && (
           <OrdersHistoryView
-            orders={orders}
+            orders={customerScopedOrders}
             settings={settings}
             savedCustomerPhone={customerProfile.phone}
-            onRepeatOrder={handleRepeatOrder}
-            onUpdateOrderStatus={(orderId, nextStatus, reason) => {
-              const target = orders.find((o) => o.id === orderId);
-              const updated = orders.map((o) =>
-                o.id === orderId ? transitionOrderStatus(o, nextStatus, reason) : o
-              );
-              handleSaveOrders(updated);
-              const meta = getOrderStageMeta(
-                nextStatus,
-                target?.deliveryType || 'pickup'
-              );
-              showToast(
-                `Pedido ${orderId} atualizado para: ${meta.shortLabel}`
-              );
+            isLoggedIn={customerLoggedIn}
+            verifiedGuestOrderId={verifiedGuestLookup?.orderId || null}
+            onVerifyGuestOrder={(orderCode, phone) => {
+              const matched = findOrderForPrivateLookup(orders, orderCode, phone);
+              if (!matched) {
+                recordSecurityEvent({
+                  category: 'tracking_access',
+                  outcome: 'blocked',
+                  actorLabel: 'Visitante da Loja',
+                  rawTarget: phone,
+                  orderId: normalizeOrderCode(orderCode) || undefined,
+                  summary: 'Consulta privada de rastreio bloqueada',
+                  detail:
+                    'Código do pedido e WhatsApp informados não correspondem a nenhum pedido autorizado.',
+                });
+                return false;
+              }
+              recordSecurityEvent({
+                category: 'tracking_access',
+                outcome: 'allowed',
+                actorLabel: matched.customerName,
+                rawTarget: matched.customerPhone,
+                orderId: matched.id,
+                summary: 'Consulta privada de rastreio autorizada',
+                detail: `Acesso isolado liberado exclusivamente para o pedido ${matched.id}.`,
+              });
+              setVerifiedGuestLookup({
+                orderId: matched.id,
+                phone: matched.customerPhone,
+              });
+              return true;
             }}
+            onClearGuestLookup={() => {
+              if (verifiedGuestLookup) {
+                recordSecurityEvent({
+                  category: 'tracking_access',
+                  outcome: 'info',
+                  actorLabel: 'Visitante da Loja',
+                  rawTarget: verifiedGuestLookup.phone,
+                  orderId: verifiedGuestLookup.orderId,
+                  summary: 'Consulta temporária de rastreio encerrada',
+                  detail: 'Chave de visualização avulsa removida manualmente pelo usuário.',
+                });
+              }
+              setVerifiedGuestLookup(null);
+            }}
+            onRequestLogin={() => {
+              setPendingOrdersRedirectAfterLogin(true);
+              setIsAccountModalOpen(true);
+            }}
+            onRepeatOrder={handleRepeatOrder}
             onBackToStore={handleGoHome}
+          />
+        )}
+
+        {activeView === 'account' && (
+          <CustomerAreaView
+            profile={customerProfile}
+            activeSection={customerAreaSection}
+            selectedOrderId={customerSelectedOrderId}
+            orders={customerScopedOrders}
+            products={products}
+            kits={kits}
+            favorites={favorites}
+            settings={settings}
+            hideAllPrices={allCatalogPricesHidden}
+            onChangeSection={(section) => setCustomerAreaSection(section)}
+            onSelectOrder={(orderId) => setCustomerSelectedOrderId(orderId)}
+            onSaveProfile={handleSaveCustomerProfile}
+            onRateOrder={handleRateOrder}
+            onRepeatOrder={handleRepeatOrder}
+            onAddToCart={handleAddToCart}
+            onToggleFavorite={handleToggleFavorite}
+            onOpenQuickOrderModal={() => setIsQuickOrderModalOpen(true)}
+            onOpenAllOrdersTracking={() => setActiveView('orders')}
+            onSwitchAccount={() => setIsAccountModalOpen(true)}
+            onLogout={handleLogoutCustomer}
+            onBackToStore={handleGoHome}
+            onShowToast={showToast}
           />
         )}
 
@@ -1637,6 +1919,19 @@ export default function App() {
             banners={banners}
             orders={orders}
             settings={settings}
+            securityLogs={securityLogs}
+            adminUsers={adminUsers}
+            siteBackups={siteBackups}
+            isolationContext={{
+              customerProfile,
+              sessionOrderIds,
+              verifiedLookup: verifiedGuestLookup,
+            }}
+            onRecordSecurityEvent={recordSecurityEvent}
+            onClearSecurityLogs={handleClearSecurityLogs}
+            onSaveAdminUsers={handleSaveAdminUsers}
+            onSaveSiteBackups={handleSaveSiteBackups}
+            onRestoreSiteBackup={handleRestoreSiteBackup}
             onSaveCategories={handleSaveCategories}
             onSaveProducts={handleSaveProducts}
             onSaveKits={handleSaveKits}
@@ -1728,67 +2023,72 @@ export default function App() {
         </button>
       )}
 
-      {/* Mobile Native-App-Like Bottom Tab Bar */}
-      <nav
-        aria-label="Menu Inferior estilo Aplicativo"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-xs border-t border-zinc-200 px-2 py-1.5 grid grid-cols-5 gap-1 no-print shadow-lg"
-      >
-        <button
-          type="button"
-          onClick={handleGoHome}
-          className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
-            activeView === 'store' && !isMegaMenuOpen && !hasActiveFilters
-              ? 'text-[#E3262E]'
-              : 'text-zinc-500'
-          }`}
+      {/* Mobile Native-App-Like Bottom Tab Bar (Storefront Only) */}
+      {activeView !== 'admin' && (
+        <nav
+          aria-label="Menu Inferior estilo Aplicativo"
+          className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-xs border-t border-zinc-200 px-2 py-1.5 grid grid-cols-5 gap-1 no-print shadow-lg"
         >
-          <HomeIcon className="w-4 h-4 mb-0.5" />
-          <span>Início</span>
-        </button>
+          <button
+            type="button"
+            onClick={handleGoHome}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
+              activeView === 'store' && !isMegaMenuOpen && !hasActiveFilters
+                ? 'text-[#E3262E]'
+                : 'text-zinc-500'
+            }`}
+          >
+            <HomeIcon className="w-4 h-4 mb-0.5" />
+            <span>Início</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setIsMegaMenuOpen((prev) => !prev)}
-          className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
-            isMegaMenuOpen ? 'text-[#E3262E]' : 'text-zinc-500'
-          }`}
-        >
-          <Menu className="w-4 h-4 mb-0.5" />
-          <span>Linhas</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setIsMegaMenuOpen((prev) => !prev)}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
+              isMegaMenuOpen ? 'text-[#E3262E]' : 'text-zinc-500'
+            }`}
+          >
+            <Menu className="w-4 h-4 mb-0.5" />
+            <span>Linhas</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setIsQuickOrderModalOpen(true)}
-          className="flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold text-zinc-600 cursor-pointer"
-        >
-          <FilePlus2 className="w-4 h-4 mb-0.5 text-[#D97706]" />
-          <span>Lote/Diluição</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setIsQuickOrderModalOpen(true)}
+            className="flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold text-zinc-600 cursor-pointer"
+          >
+            <FilePlus2 className="w-4 h-4 mb-0.5 text-[#D97706]" />
+            <span>Lote/Diluição</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setActiveView('orders');
-            setIsMegaMenuOpen(false);
-          }}
-          className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
-            activeView === 'orders' ? 'text-[#E3262E]' : 'text-zinc-500'
-          }`}
-        >
-          <Package className="w-4 h-4 mb-0.5" />
-          <span>Pedidos ({orders.length})</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsMegaMenuOpen(false);
+              setIsOrderTrackDrawerOpen(true);
+            }}
+            className={`flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold cursor-pointer ${
+              activeView === 'orders' ||
+              (activeView === 'account' && customerAreaSection === 'orders')
+                ? 'text-[#E3262E]'
+                : 'text-zinc-500'
+            }`}
+          >
+            <Package className="w-4 h-4 mb-0.5" />
+            <span>Pedidos</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setIsCartOpen(true)}
-          className="flex flex-col items-center justify-center py-1 rounded-xl bg-[#FFBE00] text-zinc-950 text-[10px] font-extrabold cursor-pointer"
-        >
-          <ShoppingBasket className="w-4 h-4 mb-0.5" />
-          <span>{allCatalogPricesHidden || cartTotals.isQuoteOnly ? 'Lista' : 'Cesta'} ({cartTotals.itemCount})</span>
-        </button>
-      </nav>
+          <button
+            type="button"
+            onClick={() => setIsCartOpen(true)}
+            className="flex flex-col items-center justify-center py-1 rounded-xl bg-[#FFBE00] text-zinc-950 text-[10px] font-extrabold cursor-pointer"
+          >
+            <ShoppingBasket className="w-4 h-4 mb-0.5" />
+            <span>{allCatalogPricesHidden || cartTotals.isQuoteOnly ? 'Lista' : 'Cesta'} ({cartTotals.itemCount})</span>
+          </button>
+        </nav>
+      )}
 
       {/* Product Detail Modal */}
       <ProductDetailModal
@@ -1809,15 +2109,65 @@ export default function App() {
         onUpdateQuantity={handleUpdateCartQty}
       />
 
+      {/* Track Order Quick Slide-Over Drawer (Drogasil-inspired) */}
+      <OrderTrackQuickDrawer
+        isOpen={isOrderTrackDrawerOpen}
+        profile={customerProfile}
+        orders={customerScopedOrders}
+        onClose={() => setIsOrderTrackDrawerOpen(false)}
+        onGoToCustomerOrders={(orderId) => {
+          setCustomerAreaSection('orders');
+          setCustomerSelectedOrderId(orderId || null);
+          setActiveView('account');
+        }}
+        onRequireLogin={() => {
+          setPendingOrdersRedirectAfterLogin(true);
+          setIsAccountModalOpen(true);
+        }}
+        onOpenStoreRadar={() => setActiveView('orders')}
+      />
+
+      {/* Quick Account Slide-Over Drawer (Drogasil-inspired) */}
+      <CustomerQuickDrawer
+        isOpen={isAccountDrawerOpen}
+        profile={customerProfile}
+        orders={customerScopedOrders}
+        favoritesCount={favorites.length}
+        settings={settings}
+        onClose={() => setIsAccountDrawerOpen(false)}
+        onNavigateSection={(section) => {
+          setCustomerAreaSection(section);
+          setCustomerSelectedOrderId(null);
+          setActiveView('account');
+        }}
+        onOpenAllOrders={() => setActiveView('orders')}
+        onOpenCepModal={() => setIsCepModalOpen(true)}
+        onSwitchAccount={() => {
+          setPendingOrdersRedirectAfterLogin(false);
+          setIsAccountModalOpen(true);
+        }}
+        onLogout={handleLogoutCustomer}
+      />
+
       {/* Customer Account Registration / Login Modal ("Boas-vindas! Entrar ou cadastrar") */}
       <CustomerAccountModal
         isOpen={isAccountModalOpen}
         profile={customerProfile}
         existingOrders={orders}
-        onClose={() => setIsAccountModalOpen(false)}
+        onClose={() => {
+          setIsAccountModalOpen(false);
+          setPendingOrdersRedirectAfterLogin(false);
+        }}
         onSaveProfile={(profile) => {
           handleSaveCustomerProfile(profile);
-          showToast(`Cadastro de ${profile.name} salvo com sucesso!`);
+          const targetSection: CustomerAreaSection = pendingOrdersRedirectAfterLogin
+            ? 'orders'
+            : 'summary';
+          setPendingOrdersRedirectAfterLogin(false);
+          setCustomerAreaSection(targetSection);
+          setCustomerSelectedOrderId(null);
+          setActiveView('account');
+          showToast(`Cadastro de ${profile.name} carregado na Área do Cliente!`);
         }}
       />
 
@@ -1828,7 +2178,22 @@ export default function App() {
         settings={settings}
         onClose={() => setIsCepModalOpen(false)}
         onSaveProfile={(profile) => {
-          handleSaveCustomerProfile(profile);
+          const existingAddresses = getCustomerAddresses(customerProfile);
+          const defaultAddr =
+            existingAddresses.find((a) => a.isDefault) || existingAddresses[0];
+          const synced = defaultAddr
+            ? upsertCustomerAddress(profile, {
+                ...defaultAddr,
+                cep: profile.cep || defaultAddr.cep,
+                street: profile.street || defaultAddr.street,
+                number: profile.number || defaultAddr.number,
+                neighborhood: profile.neighborhood || defaultAddr.neighborhood,
+                city: profile.city || defaultAddr.city,
+                interiorCityName: profile.interiorCityName || '',
+                isDefault: true,
+              })
+            : profile;
+          handleSaveCustomerProfile(synced);
           showToast(`CEP ${profile.cep} e bairro ${profile.neighborhood} atualizados!`);
         }}
       />
@@ -1869,61 +2234,72 @@ export default function App() {
         }}
       />
 
-      {/* Clean Light Institutional Footer with Official Várzea Grande Address & Phone */}
-      <footer className="bg-white text-zinc-600 border-t border-zinc-200 py-8 no-print">
-        <div className="max-w-[1360px] mx-auto px-4 sm:px-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 text-xs">
-          <div className="space-y-2">
-            <button
-              type="button"
-              onClick={handleGoHome}
-              title="Voltar para o Início · Limper MT"
-              className="flex items-center gap-3 text-left group cursor-pointer rounded-xl p-1 -ml-1 hover:bg-amber-50/70 transition-colors"
-            >
-              <img
-                src={LIMPER_LOGO_URL}
-                alt="Limper MT"
-                className="h-8 w-auto object-contain group-hover:scale-[1.02] transition-transform"
-              />
-              <span className="font-display text-sm font-extrabold text-zinc-900 group-hover:text-[#E3262E] transition-colors">
-                Catálogo Delivery & Central de Retirada Rápida 15min
+      {/* Clean Light Institutional Footer with Official Várzea Grande Address & Phone (Storefront Only) */}
+      {activeView !== 'admin' && (
+        <footer className="bg-white text-zinc-600 border-t border-zinc-200 pt-8 pb-24 md:pb-8 no-print">
+          <div className="max-w-[1360px] mx-auto px-4 sm:px-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 text-xs">
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={handleGoHome}
+                title="Voltar para o Início · Limper MT"
+                className="flex items-center gap-3 text-left group cursor-pointer rounded-xl p-1 -ml-1 hover:bg-amber-50/70 transition-colors"
+              >
+                <img
+                  src={LIMPER_LOGO_URL}
+                  alt="Limper MT"
+                  className="h-8 w-auto object-contain group-hover:scale-[1.02] transition-transform"
+                />
+                <span className="font-display text-sm font-extrabold text-zinc-900 group-hover:text-[#E3262E] transition-colors">
+                  Catálogo Delivery & Central de Retirada Rápida 15min
+                </span>
+              </button>
+              <div className="flex flex-wrap items-center gap-2 text-zinc-600">
+                <MapPin className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
+                <strong className="text-zinc-900">Endereço:</strong>
+                <span>{settings.storeAddress}</span>
+                <span aria-hidden="true">·</span>
+                <Phone className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
+                <strong className="text-zinc-900">Telefone:</strong>
+                <span className="font-mono font-bold text-zinc-900">
+                  {settings.whatsappDisplay}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3.5">
+              <a
+                href={`https://wa.me/${settings.whatsappNumber}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-zinc-900 hover:text-[#E3262E] font-bold transition-colors"
+              >
+                <MessageCircle className="w-4 h-4 text-[#1DA851]" />
+                <span>Atendimento WhatsApp: {settings.whatsappDisplay}</span>
+              </a>
+              <span aria-hidden="true" className="text-zinc-300">
+                ·
               </span>
-            </button>
-            <div className="flex flex-wrap items-center gap-2 text-zinc-600">
-              <MapPin className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
-              <strong className="text-zinc-900">Endereço:</strong>
-              <span>{settings.storeAddress}</span>
-              <span aria-hidden="true">·</span>
-              <Phone className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
-              <strong className="text-zinc-900">Telefone:</strong>
-              <span className="font-mono font-bold text-zinc-900">
-                {settings.whatsappDisplay}
-              </span>
+              <a
+                href="#admin"
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (typeof window !== 'undefined') {
+                    window.location.hash = 'admin';
+                  }
+                  setActiveView('admin');
+                }}
+                title="Acesso restrito para equipe Limper MT"
+                aria-label="Área Restrita - Acesso Administrativo"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-200/90 text-zinc-500 hover:text-zinc-950 hover:border-zinc-300 hover:bg-zinc-50 font-semibold transition-colors cursor-pointer"
+              >
+                <Lock className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Área Restrita</span>
+              </a>
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center gap-4">
-            <a
-              href={`https://wa.me/${settings.whatsappNumber}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-zinc-900 hover:text-[#E3262E] font-bold transition-colors"
-            >
-              <MessageCircle className="w-4 h-4 text-[#1DA851]" />
-              <span>Atendimento WhatsApp: {settings.whatsappDisplay}</span>
-            </a>
-            <span aria-hidden="true" className="text-zinc-300">
-              ·
-            </span>
-            <button
-              type="button"
-              onClick={() => setActiveView('admin')}
-              className="text-zinc-500 hover:text-zinc-900 font-semibold transition-colors cursor-pointer"
-            >
-              App Lojista / ADM
-            </button>
-          </div>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 }

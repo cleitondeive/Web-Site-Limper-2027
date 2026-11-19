@@ -10,7 +10,27 @@ export type CategoryIconName =
   | 'HandHeart'
   | 'PawPrint'
   | 'Wind'
-  | 'Sparkles';
+  | 'Sparkles'
+  | 'SprayCan'
+  | 'Droplets'
+  | 'FlaskConical'
+  | 'Beaker'
+  | 'Waves'
+  | 'Bath'
+  | 'ShowerHead'
+  | 'Brush'
+  | 'PaintBucket'
+  | 'Trash2'
+  | 'Recycle'
+  | 'Utensils'
+  | 'ChefHat'
+  | 'Hospital'
+  | 'Building2'
+  | 'Briefcase'
+  | 'ShieldCheck'
+  | 'Leaf'
+  | 'Flower2'
+  | 'Package';
 
 export interface Category {
   id: string;
@@ -47,7 +67,9 @@ export interface Product {
   featured?: boolean;
   dilutionHint?: string; // ex: "Rende até 50 Litros"
   badgeLabel?: string; // ex: "Ofertas do Mês | Limper MT"
+  badgeColor?: string; // Cor HEX personalizada para o Selo de Oferta (padrão #E5B800)
   subBadgeLabel?: string; // ex: "Preço Exclusivo Site | Quimiprol"
+  subBadgeColor?: string; // Cor HEX personalizada para o Selo de Destaque (padrão #FF6B00)
   kitItems?: KitComponentSnapshot[]; // Produtos inclusos quando o item é um Kit/Combo
 }
 
@@ -111,6 +133,8 @@ export interface Order {
   createdAt: string; // ISO string
   customerName: string;
   customerPhone: string; // Apenas dígitos ou formatado
+  customerDocument?: string; // CPF ou CNPJ mascarado para NF/cadastro
+  customerDocumentType?: 'cpf' | 'cnpj';
   items: OrderItemSnapshot[];
   subtotal: number;
   deliveryFee: number;
@@ -137,13 +161,46 @@ export interface Order {
   statusHistory?: OrderStatusHistoryEntry[];
   notes?: string;
   isQuoteOnly?: boolean; // true quando enviado como lista sem valor (orçamento WhatsApp)
+  customerRating?: number; // Avaliação de 1 a 5 estrelas pelo cliente
+  customerRatingNote?: string;
+}
+
+export type CustomerSegment =
+  | 'residencial'
+  | 'condominio'
+  | 'clinica'
+  | 'lavajato'
+  | 'empresa';
+
+export interface CustomerAddress {
+  id: string;
+  label: string; // ex: "Casa", "Empresa", "Condomínio"
+  cep: string;
+  street: string;
+  number: string;
+  neighborhood: string;
+  city: DeliveryCityOption;
+  interiorCityName?: string;
+  reference?: string;
+  isDefault?: boolean;
+}
+
+export interface CustomerPrivacyPrefs {
+  offersOptIn: boolean;
+  whatsappOptIn: boolean;
+  emailOptIn: boolean;
+  phoneOptIn: boolean;
+  restockRemindersOptIn: boolean;
 }
 
 export interface CustomerProfile {
   name: string;
   phone: string;
+  secondaryPhone?: string;
   email?: string;
+  documentType?: 'cpf' | 'cnpj';
   cpfCnpj?: string;
+  segment?: CustomerSegment;
   cep?: string;
   street: string;
   number: string;
@@ -151,6 +208,8 @@ export interface CustomerProfile {
   city: DeliveryCityOption;
   interiorCityName?: string;
   reference: string;
+  addresses?: CustomerAddress[];
+  privacy?: CustomerPrivacyPrefs;
   isRegistered?: boolean;
   clubDiscountActive?: boolean;
 }
@@ -232,5 +291,156 @@ export interface PromoBanner {
   active: boolean;
   order: number;
 }
+
+export type AdminAppTab =
+  | 'kanban'
+  | 'products'
+  | 'kits'
+  | 'banners'
+  | 'coupons'
+  | 'categories'
+  | 'customers'
+  | 'users'
+  | 'security'
+  | 'settings';
+
+export type AdminRoleLevel =
+  | 'master'
+  | 'manager'
+  | 'operator'
+  | 'catalog'
+  | 'viewer';
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  username: string;
+  password: string;
+  role: AdminRoleLevel;
+  jobTitle?: string;
+  email?: string;
+  avatarUrl?: string;
+  allowedTabs: AdminAppTab[];
+  active: boolean;
+  createdAt: string;
+  createdBy?: string;
+  lastLoginAt?: string;
+}
+
+export type SecurityEventCategory =
+  | 'tracking_access'
+  | 'customer_auth'
+  | 'admin_auth'
+  | 'user_management'
+  | 'site_backup'
+  | 'order_security'
+  | 'catalog_policy';
+
+export type SecurityLogDatePreset =
+  | 'all'
+  | 'today'
+  | 'yesterday'
+  | 'last7'
+  | 'specific';
+
+export type SecurityEventOutcome = 'allowed' | 'blocked' | 'info';
+
+export interface SecurityAuditEvent {
+  id: string;
+  timestamp: string;
+  category: SecurityEventCategory;
+  outcome: SecurityEventOutcome;
+  actorLabel: string;
+  actorUsername?: string;
+  actorRole?: AdminRoleLevel;
+  maskedTarget: string;
+  orderId?: string;
+  summary: string;
+  detail: string;
+}
+
+export interface CreateSecurityAuditEventInput {
+  category: SecurityEventCategory;
+  outcome: SecurityEventOutcome;
+  actorLabel: string;
+  actorUsername?: string;
+  actorRole?: AdminRoleLevel;
+  rawTarget?: string;
+  orderId?: string;
+  summary: string;
+  detail: string;
+  timestamp?: string;
+}
+
+export interface CustomerIsolationScopeCheck {
+  customerKey: string;
+  customerName: string;
+  maskedPhone: string;
+  expectedOrderIds: string[];
+  visibleOrderIds: string[];
+  crossCustomerLeakCount: number;
+  isolated: boolean;
+}
+
+export interface CustomerIsolationAuditReport {
+  checkedAt: string;
+  totalOrdersCount: number;
+  distinctCustomersCount: number;
+  guestUnverifiedVisibleCount: number;
+  ordersMissingPhoneCount: number;
+  totalCrossCustomerLeaks: number;
+  isFullyIsolated: boolean;
+  activeSessionMode:
+    | 'anonymous_locked'
+    | 'verified_guest'
+    | 'session_checkout'
+    | 'logged_in_customer';
+  activeSessionLabel: string;
+  activeSessionVisibleOrderIds: string[];
+  customerChecks: CustomerIsolationScopeCheck[];
+}
+
+export type SiteBackupTrigger =
+  | 'manual'
+  | 'auto_daily'
+  | 'pre_restore'
+  | 'imported';
+
+export interface SiteBackupPayload {
+  categories: Category[];
+  products: Product[];
+  kits: PromoKit[];
+  coupons: PromoCoupon[];
+  banners: PromoBanner[];
+  orders: Order[];
+  settings: StoreSettings;
+  adminUsers: AdminUser[];
+  securityLogs?: SecurityAuditEvent[];
+}
+
+export interface SiteBackupSummary {
+  categoriesCount: number;
+  productsCount: number;
+  kitsCount: number;
+  bannersCount: number;
+  couponsCount: number;
+  ordersCount: number;
+  adminUsersCount: number;
+  securityLogsCount: number;
+  sizeBytes: number;
+}
+
+export interface SiteBackupSnapshot {
+  id: string;
+  createdAt: string;
+  dateKey: string; // YYYY-MM-DD local calendar day
+  label: string;
+  trigger: SiteBackupTrigger;
+  createdBy: string;
+  createdByUsername?: string;
+  summary: SiteBackupSummary;
+  payload: SiteBackupPayload;
+}
+
 
 

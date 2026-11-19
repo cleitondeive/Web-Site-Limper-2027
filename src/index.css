@@ -34,8 +34,12 @@
     text-wrap: balance;
   }
 
-  .font-mono, .tabular-nums {
+  .font-mono {
     font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
 }
@@ -66,4 +70,39 @@
 
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* Refined, balanced SaaS typography inside the Admin Area (lifts micro 9-11px labels without oversizing UI) */
+@layer utilities {
+  .admin-workspace {
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .admin-workspace .text-\[9px\],
+  .admin-workspace .text-\[10px\] {
+    font-size: 0.72rem;
+    line-height: 1.05rem;
+  }
+
+  .admin-workspace .text-\[11px\] {
+    font-size: 0.75rem;
+    line-height: 1.125rem;
+  }
+
+  .admin-workspace .text-xs {
+    font-size: 0.78rem;
+    line-height: 1.15rem;
+  }
+
+  .admin-workspace .text-sm {
+    font-size: 0.875rem;
+    line-height: 1.3rem;
+  }
+
+  .admin-workspace input:not([type="checkbox"]):not([type="radio"]),
+  .admin-workspace select,
+  .admin-workspace textarea {
+    font-size: 0.8125rem;
+  }
 }
