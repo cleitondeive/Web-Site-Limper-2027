@@ -4,6 +4,7 @@ import {
   ADMIN_PRODUCTS_PAGE_SIZE,
   ALL_ADMIN_TABS,
   DEFAULT_ADMIN_USERS,
+  DEFAULT_BACKUP_SCHEDULE_CONFIG,
   DEFAULT_HIGHLIGHT_BADGE_COLOR,
   DEFAULT_PROMO_BADGE_COLOR,
   PROMO_BADGE_COLOR_PRESETS,
@@ -23,6 +24,7 @@ import {
   calculateKitPricing,
   canAdminUserAccessTab,
   canonicalBrazilPhone,
+  computePayloadChecksum,
   createSecurityAuditEvent,
   createSiteBackupSnapshot,
   deleteCustomerAddress,
@@ -31,6 +33,7 @@ import {
   duplicateProductItem,
   emptyProductTrash,
   evaluateCoupon,
+  evaluateDueScheduledBackup,
   evaluateLogisticsEligibility,
   filterOrdersByCriteria,
   filterOrdersByPhone,
@@ -59,6 +62,7 @@ import {
   getKanbanPeriodLabel,
   getLogisticsMinimumOrderValue,
   getLogisticsSettings,
+  getNextScheduledBackupInfo,
   getOrderStageMeta,
   getOrdersForCustomer,
   getPricePerLiterLabel,
@@ -77,6 +81,7 @@ import {
   moveProductsToTrash,
   normalizeAdminUsername,
   normalizeHexColor,
+  normalizeScheduleTime,
   paginateItems,
   parseImportedSiteBackupJson,
   permanentlyDeleteFromTrash,
@@ -86,6 +91,7 @@ import {
   restoreProductFromTrash,
   sanitizeTargetForAuditLog,
   setDefaultCustomerAddress,
+  sortAndDedupeScheduleTimes,
   summarizeOrdersPeriod,
   summarizeSecurityLogDates,
   summarizeSiteBackupDates,
@@ -93,6 +99,7 @@ import {
   updateCartQuantity,
   upsertCustomerAddress,
   validateAdminUserDraft,
+  validateBackupScheduleConfig,
   validateBannerDraft,
   validateCategoryDraft,
   validateCheckoutInput,
@@ -100,6 +107,7 @@ import {
   validateKitDraft,
   validateProductDraft,
   validateStoreSettingsDraft,
+  verifySiteBackupIntegrity,
 } from './commerce';
 import {
   detectDocumentType,
@@ -2165,6 +2173,158 @@ test('moveProductsToTrash, restoreProductFromTrash, permanentlyDeleteFromTrash a
   assert.equal(emptied.removedCount, 1);
   assert.equal(emptied.nextTrash.length, 0);
 });
+
+test('computePayloadChecksum and verifySiteBackupIntegrity validate intact snapshots and detect tampering', () => {
+  const basePayload = {
+    categories: INITIAL_CATEGORIES,
+    products: INITIAL_PRODUCTS,
+    kits: INITIAL_KITS,
+    coupons: INITIAL_COUPONS,
+    banners: INITIAL_BANNERS,
+    orders: INITIAL_ORDERS,
+    settings: INITIAL_STORE_SETTINGS,
+    adminUsers: DEFAULT_ADMIN_USERS,
+    securityLogs: [],
+  };
+
+  const snap = createSiteBackupSnapshot({
+    payload: basePayload,
+    trigger: 'auto_scheduled',
+    createdBy: 'Agendador Automático',
+  });
+  assert.ok(snap.checksum && /^[0-9A-F]{8}$/.test(snap.checksum));
+
+  // Intact snapshot passes integrity check
+  const okCheck = verifySiteBackupIntegrity(snap);
+  assert.equal(okCheck.valid, true);
+  assert.equal(okCheck.computedChecksum, snap.checksum);
+  assert.equal(okCheck.issues.length, 0);
+
+  // Security logs alone do not alter business-data checksum (prevents redundant exit backups)
+  const checksumWithLogs = computePayloadChecksum({
+    ...basePayload,
+    securityLogs: [
+      createSecurityAuditEvent({
+        category: 'site_backup',
+        outcome: 'info',
+        actorLabel: 'Sistema',
+        summary: 'Teste',
+        detail: 'Log apenas',
+      }),
+    ],
+  });
+  assert.equal(checksumWithLogs, snap.checksum);
+
+  // Tampering with a product price breaks checksum integrity check
+  const tamperedSnap = {
+    ...snap,
+    payload: {
+      ...snap.payload,
+      products: snap.payload.products.map((p, idx) =>
+        idx === 0 ? { ...p, price: p.price + 10 } : p
+      ),
+    },
+  };
+  const failCheck = verifySiteBackupIntegrity(tamperedSnap);
+  assert.equal(failCheck.valid, false);
+  assert.ok(failCheck.issues.some((i) => i.includes('divergente')));
+});
+
+test('Scheduled backup engine normalizes times, validates config, evaluates exact/catch-up slots, and computes next run', () => {
+  assert.equal(normalizeScheduleTime('9:05'), '09:05');
+  assert.equal(normalizeScheduleTime('23:59'), '23:59');
+  assert.equal(normalizeScheduleTime('24:00'), null);
+  assert.equal(normalizeScheduleTime('abc'), null);
+
+  assert.deepEqual(sortAndDedupeScheduleTimes(['18:00', '9:00', '18:00', 'invalid', '12:30']), [
+    '09:00',
+    '12:30',
+    '18:00',
+  ]);
+
+  assert.equal(
+    validateBackupScheduleConfig({
+      ...DEFAULT_BACKUP_SCHEDULE_CONFIG,
+      enabled: true,
+      times: [],
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateBackupScheduleConfig({
+      ...DEFAULT_BACKUP_SCHEDULE_CONFIG,
+      enabled: true,
+      daysOfWeek: [],
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateBackupScheduleConfig({
+      ...DEFAULT_BACKUP_SCHEDULE_CONFIG,
+      enabled: true,
+      times: ['09:00', '18:00'],
+      daysOfWeek: [1, 2, 3, 4, 5],
+      maxRetention: 20,
+    }).valid,
+    true
+  );
+
+  // Construct local date Tuesday 2026-11-24 at 09:01 (day 2)
+  const tue0901 = new Date(2026, 10, 24, 9, 1, 0, 0).getTime();
+  const cfg = {
+    ...DEFAULT_BACKUP_SCHEDULE_CONFIG,
+    enabled: true,
+    times: ['09:00', '18:00'],
+    daysOfWeek: [2, 4], // Tue, Thu
+    runMissedOnReopen: true,
+  };
+
+  // Exact scheduled window triggers without catch-up flag
+  const dueExact = evaluateDueScheduledBackup(cfg, tue0901, []);
+  assert.equal(dueExact.isDue, true);
+  assert.equal(dueExact.slotTime, '09:00');
+  assert.equal(dueExact.slotKey, '2026-11-24@09:00');
+  assert.equal(dueExact.isCatchUp, false);
+
+  // Already executed slot does NOT fire again
+  const alreadyDone = evaluateDueScheduledBackup(
+    { ...cfg, lastExecutedSlotKey: '2026-11-24@09:00' },
+    tue0901,
+    []
+  );
+  assert.equal(alreadyDone.isDue, false);
+
+  // Missed slot at 11:30 triggers catch-up when runMissedOnReopen=true, skips when false
+  const tue1130 = new Date(2026, 10, 24, 11, 30, 0, 0).getTime();
+  const dueCatchUp = evaluateDueScheduledBackup(cfg, tue1130, []);
+  assert.equal(dueCatchUp.isDue, true);
+  assert.equal(dueCatchUp.slotTime, '09:00');
+  assert.equal(dueCatchUp.isCatchUp, true);
+
+  const skipCatchUp = evaluateDueScheduledBackup(
+    { ...cfg, runMissedOnReopen: false },
+    tue1130,
+    []
+  );
+  assert.equal(skipCatchUp.isDue, false);
+
+  // Non-scheduled weekday (Wednesday = 3) never fires
+  const wed0900 = new Date(2026, 10, 25, 9, 0, 0, 0).getTime();
+  assert.equal(evaluateDueScheduledBackup(cfg, wed0900, []).isDue, false);
+
+  // Next scheduled info finds same-day 18:00 from 11:30
+  const nextSameDay = getNextScheduledBackupInfo(cfg, tue1130);
+  assert.equal(nextSameDay?.nextDateKey, '2026-11-24');
+  assert.equal(nextSameDay?.nextTime, '18:00');
+  assert.ok(nextSameDay?.label.startsWith('Hoje às 18:00'));
+
+  // From Tue 19:00, skips Wed and finds Thu 09:00
+  const tue1900 = new Date(2026, 10, 24, 19, 0, 0, 0).getTime();
+  const nextThu = getNextScheduledBackupInfo(cfg, tue1900);
+  assert.equal(nextThu?.nextDateKey, '2026-11-26');
+  assert.equal(nextThu?.nextTime, '09:00');
+});
+
 
 
 

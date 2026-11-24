@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import {
   AdminUser,
+  BackupScheduleConfig,
   CartItem,
   CatalogSortOption,
   Category,
@@ -42,6 +43,7 @@ import {
   PromoCoupon,
   PromoKit,
   SecurityAuditEvent,
+  SiteBackupPayload,
   SiteBackupSnapshot,
   StoreSettings,
   VolumeFilterOption,
@@ -49,12 +51,18 @@ import {
 import {
   addToCart,
   appendSecurityAuditEvent,
+  appendSiteBackupSnapshot,
   buildKitCartProduct,
   buildLogisticsWhatsAppConsultUrl,
   calculateCartTotals,
   calculateKitPricing,
+  computePayloadChecksum,
+  createSiteBackupSnapshot,
+  evaluateDueScheduledBackup,
   filterProducts,
   findOrderForPrivateLookup,
+  formatBackupByteSize,
+  formatBrDateFromYmd,
   formatCurrency,
   getCustomerAddresses,
   getCustomerLatestActiveOrder,
@@ -137,6 +145,9 @@ export default function App() {
   const [siteBackups, setSiteBackups] = useState<SiteBackupSnapshot[]>(() =>
     storageService.getSiteBackups()
   );
+  const [backupSchedule, setBackupSchedule] = useState<BackupScheduleConfig>(() =>
+    storageService.getBackupSchedule()
+  );
   const [activeCouponCode, setActiveCouponCode] = useState<string>('');
 
   useEffect(() => {
@@ -147,6 +158,195 @@ export default function App() {
     });
     return () => {
       active = false;
+    };
+  }, []);
+
+  // Keep a synchronous ref of the full database payload + schedule for 15s timer & unexpected-close guards
+  const liveBackupContextRef = React.useRef<{
+    payload: SiteBackupPayload;
+    siteBackups: SiteBackupSnapshot[];
+    backupSchedule: BackupScheduleConfig;
+    securityLogs: SecurityAuditEvent[];
+  }>({
+    payload: {
+      categories,
+      products,
+      deletedProducts: storageService.getDeletedProducts(),
+      kits,
+      coupons,
+      banners,
+      orders,
+      settings,
+      adminUsers,
+      securityLogs,
+    },
+    siteBackups,
+    backupSchedule,
+    securityLogs,
+  });
+
+  liveBackupContextRef.current = {
+    payload: {
+      categories,
+      products,
+      deletedProducts: storageService.getDeletedProducts(),
+      kits,
+      coupons,
+      banners,
+      orders,
+      settings,
+      adminUsers,
+      securityLogs,
+    },
+    siteBackups,
+    backupSchedule,
+    securityLogs,
+  };
+
+  // Scheduled automatic database backup runner (checks immediately on mount/config update + every 15s)
+  useEffect(() => {
+    const runScheduledCheck = () => {
+      const ctx = liveBackupContextRef.current;
+      const due = evaluateDueScheduledBackup(
+        ctx.backupSchedule,
+        Date.now(),
+        ctx.siteBackups
+      );
+      if (!due.isDue || !due.slotKey || !due.slotTime) return;
+
+      const snapshot = createSiteBackupSnapshot({
+        payload: ctx.payload,
+        trigger: 'auto_scheduled',
+        scheduleSlotKey: due.slotKey,
+        label: due.isCatchUp
+          ? `Backup agendado recuperado · ${due.slotTime} (${formatBrDateFromYmd(
+              due.slotKey.slice(0, 10)
+            )})`
+          : `Backup agendado automático · ${due.slotTime} (${formatBrDateFromYmd(
+              due.slotKey.slice(0, 10)
+            )})`,
+        createdBy: 'Agendador Automático',
+        createdByUsername: 'sistema',
+      });
+
+      const nextBackups = appendSiteBackupSnapshot(
+        ctx.siteBackups,
+        snapshot,
+        ctx.backupSchedule.maxRetention
+      );
+      const nextSchedule: BackupScheduleConfig = {
+        ...ctx.backupSchedule,
+        lastExecutedSlotKey: due.slotKey,
+        lastExecutedAt: snapshot.createdAt,
+      };
+
+      liveBackupContextRef.current.siteBackups = nextBackups;
+      liveBackupContextRef.current.backupSchedule = nextSchedule;
+      setSiteBackups(nextBackups);
+      storageService.saveSiteBackups(nextBackups);
+      setBackupSchedule(nextSchedule);
+      storageService.saveBackupSchedule(nextSchedule);
+
+      const nextLogs = appendSecurityAuditEvent(ctx.securityLogs, {
+        category: 'site_backup',
+        outcome: 'allowed',
+        actorLabel: 'Agendador Automático',
+        actorUsername: 'sistema',
+        rawTarget: `Backup ${formatBrDateFromYmd(snapshot.dateKey)} · ${due.slotTime}`,
+        summary: due.isCatchUp
+          ? `Backup agendado recuperado automaticamente (${due.slotTime})`
+          : `Backup agendado executado automaticamente (${due.slotTime})`,
+        detail: `${snapshot.summary.productsCount} produtos, ${snapshot.summary.ordersCount} pedidos salvos · Integridade #${snapshot.checksum} (${formatBackupByteSize(snapshot.summary.sizeBytes)}).`,
+      });
+      liveBackupContextRef.current.securityLogs = nextLogs;
+      setSecurityLogs(nextLogs);
+      storageService.saveSecurityLogs(nextLogs);
+    };
+
+    runScheduledCheck();
+    const timer = window.setInterval(runScheduledCheck, 15000);
+    return () => window.clearInterval(timer);
+  }, [
+    backupSchedule.enabled,
+    backupSchedule.times,
+    backupSchedule.daysOfWeek,
+    backupSchedule.runMissedOnReopen,
+    backupSchedule.maxRetention,
+  ]);
+
+  // Unexpected browser close / tab hide integrity guard (pagehide, beforeunload, visibilitychange)
+  useEffect(() => {
+    const captureEmergencyIntegritySnapshot = () => {
+      const ctx = liveBackupContextRef.current;
+      if (!ctx.backupSchedule.autoBackupOnExit) return;
+
+      const freshPayload: SiteBackupPayload = {
+        ...ctx.payload,
+        deletedProducts: storageService.getDeletedProducts(),
+      };
+      const liveChecksum = computePayloadChecksum(freshPayload);
+      const latestSnap = ctx.siteBackups[0];
+      const latestChecksum = latestSnap
+        ? latestSnap.checksum || computePayloadChecksum(latestSnap.payload)
+        : null;
+
+      // Only persist an emergency snapshot if database contents actually changed since the last backup
+      if (latestChecksum && latestChecksum === liveChecksum) {
+        return;
+      }
+
+      const snapshot = createSiteBackupSnapshot({
+        payload: freshPayload,
+        trigger: 'auto_shutdown',
+        createdBy: 'Proteção ao Fechar Navegador',
+        createdByUsername: 'sistema',
+      });
+
+      const nextBackups = appendSiteBackupSnapshot(
+        ctx.siteBackups,
+        snapshot,
+        ctx.backupSchedule.maxRetention
+      );
+      const nextSchedule: BackupScheduleConfig = {
+        ...ctx.backupSchedule,
+        lastShutdownBackupAt: snapshot.createdAt,
+      };
+      const nextLogs = appendSecurityAuditEvent(ctx.securityLogs, {
+        category: 'site_backup',
+        outcome: 'allowed',
+        actorLabel: 'Proteção ao Fechar Navegador',
+        actorUsername: 'sistema',
+        rawTarget: `Backup ${formatBrDateFromYmd(snapshot.dateKey)}`,
+        summary: 'Backup automático de integridade salvo ao encerrar/ocultar navegador',
+        detail: `Alterações recentes protegidas antes do fechamento · Integridade #${snapshot.checksum} (${formatBackupByteSize(snapshot.summary.sizeBytes)}).`,
+      });
+
+      // Commit synchronously to localStorage FIRST + enqueue IndexedDB mirror so abrupt shutdown never loses data
+      liveBackupContextRef.current.siteBackups = nextBackups;
+      liveBackupContextRef.current.backupSchedule = nextSchedule;
+      liveBackupContextRef.current.securityLogs = nextLogs;
+      storageService.saveSiteBackupsSyncEmergency(nextBackups);
+      storageService.saveBackupSchedule(nextSchedule);
+      storageService.saveSecurityLogs(nextLogs);
+
+      setSiteBackups(nextBackups);
+      setBackupSchedule(nextSchedule);
+      setSecurityLogs(nextLogs);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        captureEmergencyIntegritySnapshot();
+      }
+    };
+
+    window.addEventListener('pagehide', captureEmergencyIntegritySnapshot);
+    window.addEventListener('beforeunload', captureEmergencyIntegritySnapshot);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', captureEmergencyIntegritySnapshot);
+      window.removeEventListener('beforeunload', captureEmergencyIntegritySnapshot);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -335,10 +535,18 @@ export default function App() {
     storageService.saveSiteBackups(updated);
   };
 
+  const handleSaveBackupSchedule = (updated: BackupScheduleConfig) => {
+    setBackupSchedule(updated);
+    storageService.saveBackupSchedule(updated);
+  };
+
   const handleRestoreSiteBackup = (snapshot: SiteBackupSnapshot) => {
     const p = snapshot.payload;
     handleSaveCategories(p.categories);
     handleSaveProducts(p.products);
+    if (Array.isArray(p.deletedProducts)) {
+      storageService.saveDeletedProducts(p.deletedProducts);
+    }
     handleSaveKits(p.kits);
     handleSaveCoupons(p.coupons);
     handleSaveBanners(p.banners);
@@ -1922,6 +2130,7 @@ export default function App() {
             securityLogs={securityLogs}
             adminUsers={adminUsers}
             siteBackups={siteBackups}
+            backupSchedule={backupSchedule}
             isolationContext={{
               customerProfile,
               sessionOrderIds,
@@ -1931,6 +2140,7 @@ export default function App() {
             onClearSecurityLogs={handleClearSecurityLogs}
             onSaveAdminUsers={handleSaveAdminUsers}
             onSaveSiteBackups={handleSaveSiteBackups}
+            onSaveBackupSchedule={handleSaveBackupSchedule}
             onRestoreSiteBackup={handleRestoreSiteBackup}
             onSaveCategories={handleSaveCategories}
             onSaveProducts={handleSaveProducts}

@@ -411,12 +411,15 @@ export interface CustomerIsolationAuditReport {
 export type SiteBackupTrigger =
   | 'manual'
   | 'auto_daily'
+  | 'auto_scheduled'
+  | 'auto_shutdown'
   | 'pre_restore'
   | 'imported';
 
 export interface SiteBackupPayload {
   categories: Category[];
   products: Product[];
+  deletedProducts?: DeletedProductEntry[];
   kits: PromoKit[];
   coupons: PromoCoupon[];
   banners: PromoBanner[];
@@ -446,9 +449,33 @@ export interface SiteBackupSnapshot {
   trigger: SiteBackupTrigger;
   createdBy: string;
   createdByUsername?: string;
+  checksum?: string; // 8-char deterministic FNV-1a integrity fingerprint
+  scheduleSlotKey?: string; // e.g. "2026-11-24@18:00"
   summary: SiteBackupSummary;
   payload: SiteBackupPayload;
 }
+
+export interface BackupScheduleConfig {
+  enabled: boolean;
+  times: string[]; // Sorted unique HH:mm 24h strings (e.g. ["09:00", "18:00"])
+  daysOfWeek: number[]; // 0=Domingo .. 6=Sábado
+  maxRetention: number; // Max snapshots retained (5..30)
+  autoBackupOnExit: boolean; // Emergency snapshot on pagehide/beforeunload/tab-hide when data changed
+  runMissedOnReopen: boolean; // Run catch-up backup on reopen if browser was closed during a scheduled slot
+  lastExecutedSlotKey?: string;
+  lastExecutedAt?: string;
+  lastShutdownBackupAt?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface SiteBackupIntegrityResult {
+  valid: boolean;
+  expectedChecksum?: string;
+  computedChecksum: string;
+  issues: string[];
+}
+
 
 
 

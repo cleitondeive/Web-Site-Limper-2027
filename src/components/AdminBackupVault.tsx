@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
+  CalendarClock,
   CheckCircle2,
   Clock,
   Crown,
@@ -8,7 +9,10 @@ import {
   Download,
   HardDrive,
   Lock,
+  Play,
+  Plus,
   RotateCcw,
+  Save,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -18,40 +22,54 @@ import {
 } from 'lucide-react';
 import {
   AdminUser,
+  BackupScheduleConfig,
   CreateSecurityAuditEventInput,
   SiteBackupPayload,
   SiteBackupSnapshot,
 } from '../types/commerce';
 import {
+  DEFAULT_BACKUP_SCHEDULE_CONFIG,
   SITE_BACKUP_TRIGGER_META,
+  WEEKDAY_SHORT_LABELS,
   appendSiteBackupSnapshot,
   createSiteBackupSnapshot,
   filterSiteBackupsByDate,
   formatAdminActorLabel,
   formatBackupByteSize,
   formatBrDateFromYmd,
+  getNextScheduledBackupInfo,
+  normalizeScheduleTime,
   parseImportedSiteBackupJson,
+  sortAndDedupeScheduleTimes,
   summarizeSiteBackupDates,
+  validateBackupScheduleConfig,
+  verifySiteBackupIntegrity,
 } from '../utils/commerce';
 
 interface AdminBackupVaultProps {
   currentAdminUser: AdminUser | null;
   backups: SiteBackupSnapshot[];
+  backupSchedule?: BackupScheduleConfig;
   currentSitePayload: SiteBackupPayload;
   externalDateFilter?: string;
   onClearExternalDateFilter?: () => void;
   onSaveBackups: (backups: SiteBackupSnapshot[]) => void;
+  onSaveBackupSchedule?: (schedule: BackupScheduleConfig) => void;
   onRestoreBackup: (snapshot: SiteBackupSnapshot) => void;
   onRecordSecurityEvent: (input: CreateSecurityAuditEventInput) => void;
 }
 
+const QUICK_SCHEDULE_TIME_PRESETS = ['08:00', '12:00', '18:00', '22:00'];
+
 export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
   currentAdminUser,
   backups,
+  backupSchedule = DEFAULT_BACKUP_SCHEDULE_CONFIG,
   currentSitePayload,
   externalDateFilter = '',
   onClearExternalDateFilter,
   onSaveBackups,
+  onSaveBackupSchedule,
   onRestoreBackup,
   onRecordSecurityEvent,
 }) => {
@@ -67,6 +85,44 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
     tone: 'success' | 'error';
     message: string;
   } | null>(null);
+
+  // Local editable draft for automatic backup scheduling
+  const [scheduleDraft, setScheduleDraft] = useState<BackupScheduleConfig>(backupSchedule);
+  const [newTimeInput, setNewTimeInput] = useState<string>('12:00');
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [clockTick, setClockTick] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    setScheduleDraft((prev) => ({
+      ...backupSchedule,
+      // Preserve unsaved form edits only if timestamps match, otherwise sync persisted schedule
+      lastExecutedAt: backupSchedule.lastExecutedAt ?? prev.lastExecutedAt,
+      lastExecutedSlotKey: backupSchedule.lastExecutedSlotKey ?? prev.lastExecutedSlotKey,
+      lastShutdownBackupAt:
+        backupSchedule.lastShutdownBackupAt ?? prev.lastShutdownBackupAt,
+    }));
+  }, [backupSchedule]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const nextScheduledInfo = useMemo(
+    () => getNextScheduledBackupInfo(backupSchedule, clockTick),
+    [backupSchedule, clockTick]
+  );
+
+  const hasUnsavedScheduleChanges = useMemo(() => {
+    return (
+      scheduleDraft.enabled !== backupSchedule.enabled ||
+      scheduleDraft.autoBackupOnExit !== backupSchedule.autoBackupOnExit ||
+      scheduleDraft.runMissedOnReopen !== backupSchedule.runMissedOnReopen ||
+      scheduleDraft.maxRetention !== backupSchedule.maxRetention ||
+      scheduleDraft.times.join(',') !== backupSchedule.times.join(',') ||
+      scheduleDraft.daysOfWeek.join(',') !== backupSchedule.daysOfWeek.join(',')
+    );
+  }, [scheduleDraft, backupSchedule]);
 
   useEffect(() => {
     if (externalDateFilter) {
@@ -126,6 +182,131 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
     );
   }
 
+  const handleAddScheduleTime = (timeCandidate?: string) => {
+    const raw = timeCandidate ?? newTimeInput;
+    const normalized = normalizeScheduleTime(raw);
+    if (!normalized) {
+      setScheduleError('Informe um horário válido no formato HH:MM (ex: 18:00).');
+      return;
+    }
+    if (scheduleDraft.times.includes(normalized)) {
+      setScheduleError(`O horário ${normalized} já está na lista de agendamento.`);
+      return;
+    }
+    if (scheduleDraft.times.length >= 8) {
+      setScheduleError('Limite máximo de 8 horários agendados por dia.');
+      return;
+    }
+    setScheduleError(null);
+    setScheduleDraft((prev) => ({
+      ...prev,
+      times: sortAndDedupeScheduleTimes([...prev.times, normalized]),
+    }));
+  };
+
+  const handleRemoveScheduleTime = (timeToRemove: string) => {
+    setScheduleError(null);
+    setScheduleDraft((prev) => ({
+      ...prev,
+      times: prev.times.filter((t) => t !== timeToRemove),
+    }));
+  };
+
+  const handleToggleScheduleDay = (day: number) => {
+    setScheduleError(null);
+    setScheduleDraft((prev) => {
+      const exists = prev.daysOfWeek.includes(day);
+      const nextDays = exists
+        ? prev.daysOfWeek.filter((d) => d !== day)
+        : [...prev.daysOfWeek, day].sort((a, b) => a - b);
+      return { ...prev, daysOfWeek: nextDays };
+    });
+  };
+
+  const handleSaveSchedule = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanedConfig: BackupScheduleConfig = {
+      ...scheduleDraft,
+      times: sortAndDedupeScheduleTimes(scheduleDraft.times),
+      daysOfWeek: Array.from(new Set(scheduleDraft.daysOfWeek)).sort((a, b) => a - b),
+      updatedAt: new Date().toISOString(),
+      updatedBy: actorLabel,
+    };
+    const validation = validateBackupScheduleConfig(cleanedConfig);
+    if (!validation.valid) {
+      setScheduleError(validation.error || 'Verifique os campos do agendamento.');
+      return;
+    }
+    setScheduleError(null);
+    onSaveBackupSchedule?.(cleanedConfig);
+    onRecordSecurityEvent({
+      category: 'site_backup',
+      outcome: 'allowed',
+      actorLabel,
+      actorUsername: currentAdminUser?.username,
+      actorRole: currentAdminUser?.role,
+      rawTarget: cleanedConfig.enabled
+        ? `Horários: ${cleanedConfig.times.join(', ')}`
+        : 'Agendamento pausado',
+      summary: cleanedConfig.enabled
+        ? `Agendamento automático de backups salvo (${cleanedConfig.times.join(', ')})`
+        : 'Agendamento automático de backups pausado',
+      detail: `Proteção ao fechar navegador: ${
+        cleanedConfig.autoBackupOnExit ? 'Ativa' : 'Desativada'
+      } · Recuperar ao reabrir: ${
+        cleanedConfig.runMissedOnReopen ? 'Sim' : 'Não'
+      } · Retenção: até ${cleanedConfig.maxRetention} backups.`,
+    });
+    setFeedback({
+      tone: 'success',
+      message: cleanedConfig.enabled
+        ? `Agendamento salvo! Backups automáticos programados para ${cleanedConfig.times.join(
+            ', '
+          )} com verificação de integridade.`
+        : 'Configurações de agendamento salvas (execução programada pausada).',
+    });
+  };
+
+  const handleRunScheduledBackupNow = () => {
+    const now = new Date();
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(
+      now.getMinutes()
+    ).padStart(2, '0')}`;
+    const snapshot = createSiteBackupSnapshot({
+      payload: currentSitePayload,
+      trigger: 'auto_scheduled',
+      label: `Backup agendado executado agora · ${hhmm}`,
+      createdBy: actorLabel,
+      createdByUsername: currentAdminUser?.username,
+    });
+    const nextBackups = appendSiteBackupSnapshot(
+      backups,
+      snapshot,
+      backupSchedule.maxRetention
+    );
+    onSaveBackups(nextBackups);
+    onSaveBackupSchedule?.({
+      ...backupSchedule,
+      lastExecutedAt: snapshot.createdAt,
+    });
+    onRecordSecurityEvent({
+      category: 'site_backup',
+      outcome: 'allowed',
+      actorLabel,
+      actorUsername: currentAdminUser?.username,
+      actorRole: currentAdminUser?.role,
+      rawTarget: `Backup ${formatBrDateFromYmd(snapshot.dateKey)}`,
+      summary: `Backup agendado testado manualmente (${hhmm})`,
+      detail: `${snapshot.summary.productsCount} produtos e ${snapshot.summary.ordersCount} pedidos salvos · Integridade #${snapshot.checksum} (${formatBackupByteSize(snapshot.summary.sizeBytes)}).`,
+    });
+    setFeedback({
+      tone: 'success',
+      message: `Backup agendado salvo e verificado (#${snapshot.checksum}) com ${formatBackupByteSize(
+        snapshot.summary.sizeBytes
+      )}.`,
+    });
+  };
+
   const handleCreateManualBackup = (e: React.FormEvent) => {
     e.preventDefault();
     const snapshot = createSiteBackupSnapshot({
@@ -135,7 +316,11 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       createdBy: actorLabel,
       createdByUsername: currentAdminUser?.username,
     });
-    const nextBackups = appendSiteBackupSnapshot(backups, snapshot);
+    const nextBackups = appendSiteBackupSnapshot(
+      backups,
+      snapshot,
+      backupSchedule.maxRetention
+    );
     onSaveBackups(nextBackups);
     onRecordSecurityEvent({
       category: 'site_backup',
@@ -145,7 +330,7 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       actorRole: currentAdminUser?.role,
       rawTarget: `Backup ${formatBrDateFromYmd(snapshot.dateKey)}`,
       summary: `Backup do site criado: ${snapshot.label}`,
-      detail: `${snapshot.summary.productsCount} produtos, ${snapshot.summary.categoriesCount} categorias, ${snapshot.summary.ordersCount} pedidos e ${snapshot.summary.adminUsersCount} usuário(s) salvos (${formatBackupByteSize(snapshot.summary.sizeBytes)}).`,
+      detail: `${snapshot.summary.productsCount} produtos, ${snapshot.summary.categoriesCount} categorias, ${snapshot.summary.ordersCount} pedidos e ${snapshot.summary.adminUsersCount} usuário(s) salvos · Integridade #${snapshot.checksum} (${formatBackupByteSize(snapshot.summary.sizeBytes)}).`,
     });
     setBackupLabel('');
     setDateFilter('');
@@ -248,6 +433,27 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
   };
 
   const handleConfirmRestore = (snapshot: SiteBackupSnapshot) => {
+    // 0. Verify cryptographic/checksum & structural integrity before overwriting live database
+    const integrity = verifySiteBackupIntegrity(snapshot);
+    if (!integrity.valid) {
+      setConfirmRestoreId(null);
+      setFeedback({
+        tone: 'error',
+        message: `Restauração bloqueada por falha de integridade: ${integrity.issues.join(' ')}`,
+      });
+      onRecordSecurityEvent({
+        category: 'site_backup',
+        outcome: 'blocked',
+        actorLabel,
+        actorUsername: currentAdminUser?.username,
+        actorRole: currentAdminUser?.role,
+        rawTarget: `Backup ${formatBrDateFromYmd(snapshot.dateKey)}`,
+        summary: 'Restauração bloqueada por falha de integridade no snapshot',
+        detail: integrity.issues.join(' '),
+      });
+      return;
+    }
+
     // 1. Always create an automatic safety snapshot before overwriting live data
     const safetySnapshot = createSiteBackupSnapshot({
       payload: currentSitePayload,
@@ -256,7 +462,11 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       createdBy: actorLabel,
       createdByUsername: currentAdminUser?.username,
     });
-    const updatedBackups = appendSiteBackupSnapshot(backups, safetySnapshot);
+    const updatedBackups = appendSiteBackupSnapshot(
+      backups,
+      safetySnapshot,
+      backupSchedule.maxRetention
+    );
     onSaveBackups(updatedBackups);
 
     // 2. Restore all site state from selected snapshot
@@ -379,6 +589,342 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
           </button>
         </div>
       )}
+
+      {/* Automatic Database Backup Scheduler & Unexpected-Close Integrity Guard */}
+      <form
+        id="admin-backup-scheduler"
+        onSubmit={handleSaveSchedule}
+        className="rounded-2xl border border-zinc-200 bg-[#FAFAFA] p-4 sm:p-5 space-y-4"
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-zinc-200/80 pb-3.5">
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-mono font-extrabold uppercase tracking-wider text-indigo-700">
+              <CalendarClock className="w-3.5 h-3.5" />
+              <span>Agendador Automático & Integridade Contínua</span>
+            </div>
+            <h3 className="font-display text-sm sm:text-base font-extrabold text-zinc-900">
+              Agendamento Automático de Backups do Banco de Dados
+            </h3>
+            <p className="text-xs text-zinc-500 max-w-2xl">
+              Defina os horários em que o sistema deve gravar snapshots completos automaticamente e mantenha os dados protegidos caso o navegador seja fechado inesperadamente.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={scheduleDraft.enabled}
+              aria-label="Ativar agendamento automático de backups"
+              onClick={() => {
+                setScheduleError(null);
+                setScheduleDraft((prev) => ({ ...prev, enabled: !prev.enabled }));
+              }}
+              className={`px-3.5 py-2 rounded-xl border text-xs font-extrabold inline-flex items-center gap-2 cursor-pointer transition-colors ${
+                scheduleDraft.enabled
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 shadow-2xs'
+                  : 'bg-white hover:bg-zinc-100 text-zinc-700 border-zinc-300'
+              }`}
+            >
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  scheduleDraft.enabled ? 'bg-[#FFBE00]' : 'bg-zinc-400'
+                }`}
+              />
+              <span>
+                {scheduleDraft.enabled
+                  ? 'Agendamento Ativo'
+                  : 'Agendamento Desativado'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Live Next Run & Last Shutdown Guard Summary */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+          <div className="rounded-xl bg-white border border-zinc-200 px-3.5 py-2.5 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[10px] font-mono font-bold uppercase text-zinc-500">
+                  Próximo Backup Agendado
+                </div>
+                <div className="font-bold text-zinc-900 truncate">
+                  {nextScheduledInfo
+                    ? nextScheduledInfo.label
+                    : backupSchedule.enabled
+                    ? 'Configure ao menos 1 horário e dia ativo'
+                    : 'Ative o agendamento e salve para iniciar'}
+                </div>
+              </div>
+            </div>
+            {backupSchedule.lastExecutedAt && (
+              <span className="text-[10px] font-mono text-zinc-500 shrink-0">
+                Último:{' '}
+                {new Date(backupSchedule.lastExecutedAt).toLocaleTimeString('pt-BR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </span>
+            )}
+          </div>
+
+          <div className="rounded-xl bg-white border border-zinc-200 px-3.5 py-2.5 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <ShieldCheck
+                className={`w-4 h-4 shrink-0 ${
+                  backupSchedule.autoBackupOnExit
+                    ? 'text-emerald-600'
+                    : 'text-zinc-400'
+                }`}
+              />
+              <div className="min-w-0">
+                <div className="text-[10px] font-mono font-bold uppercase text-zinc-500">
+                  Proteção Contra Fechamento Inesperado
+                </div>
+                <div className="font-bold text-zinc-900 truncate">
+                  {backupSchedule.autoBackupOnExit
+                    ? 'Ativa · Gravação síncrona + checksum ao sair'
+                    : 'Desativada pelo administrador'}
+                </div>
+              </div>
+            </div>
+            {backupSchedule.lastShutdownBackupAt && (
+              <span className="text-[10px] font-mono text-emerald-700 font-bold shrink-0">
+                Salvo{' '}
+                {new Date(backupSchedule.lastShutdownBackupAt).toLocaleTimeString(
+                  'pt-BR',
+                  { hour: '2-digit', minute: '2-digit' }
+                )}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Schedule Controls: Times + Weekdays */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          {/* Scheduled Time Slots */}
+          <div className="lg:col-span-7 bg-white rounded-xl border border-zinc-200 p-3.5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="backup-schedule-time-input"
+                className="text-xs font-extrabold text-zinc-900"
+              >
+                Horários Definidos pelo Administrador ({scheduleDraft.times.length}/8)
+              </label>
+              <div className="flex flex-wrap items-center gap-1">
+                {QUICK_SCHEDULE_TIME_PRESETS.map((preset) => {
+                  const alreadyAdded = scheduleDraft.times.includes(preset);
+                  return (
+                    <button
+                      key={`preset-${preset}`}
+                      type="button"
+                      disabled={alreadyAdded}
+                      onClick={() => handleAddScheduleTime(preset)}
+                      className={`px-2 py-0.5 rounded-md border font-mono text-[10px] font-bold transition-colors ${
+                        alreadyAdded
+                          ? 'bg-zinc-100 text-zinc-400 border-zinc-200 cursor-not-allowed'
+                          : 'bg-[#FFFBEB] hover:bg-[#FFBE00] text-zinc-900 border-[#FDE68A] cursor-pointer'
+                      }`}
+                    >
+                      +{preset}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                id="backup-schedule-time-input"
+                type="time"
+                value={newTimeInput}
+                onChange={(e) => setNewTimeInput(e.target.value)}
+                aria-label="Novo horário para backup automático"
+                className="px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono font-bold text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => handleAddScheduleTime()}
+                className="px-3.5 py-2 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Adicionar Horário</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              {scheduleDraft.times.length === 0 ? (
+                <span className="text-xs text-zinc-500">
+                  Nenhum horário adicionado. Selecione um horário acima e clique em &ldquo;Adicionar Horário&rdquo;.
+                </span>
+              ) : (
+                scheduleDraft.times.map((slot) => (
+                  <span
+                    key={`slot-${slot}`}
+                    className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 font-mono text-xs font-extrabold text-indigo-900"
+                  >
+                    <Clock className="w-3 h-3 text-indigo-600" />
+                    <span>{slot}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveScheduleTime(slot)}
+                      aria-label={`Remover horário ${slot}`}
+                      className="p-0.5 rounded hover:bg-indigo-200/70 text-indigo-700 cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Days of Week + Retention */}
+          <div className="lg:col-span-5 bg-white rounded-xl border border-zinc-200 p-3.5 space-y-3">
+            <div className="text-xs font-extrabold text-zinc-900">
+              Dias da Semana ({scheduleDraft.daysOfWeek.length}/7)
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {WEEKDAY_SHORT_LABELS.map((item) => {
+                const active = scheduleDraft.daysOfWeek.includes(item.day);
+                return (
+                  <button
+                    key={`wd-${item.day}`}
+                    type="button"
+                    aria-pressed={active}
+                    aria-label={`Agendar para ${item.fullName}`}
+                    onClick={() => handleToggleScheduleDay(item.day)}
+                    className={`py-2 rounded-lg border text-[11px] font-extrabold transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-zinc-950 text-[#FFBE00] border-zinc-950'
+                        : 'bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-600 border-zinc-200'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="pt-1 flex items-center justify-between gap-2">
+              <label
+                htmlFor="backup-max-retention"
+                className="text-xs font-bold text-zinc-700"
+              >
+                Retenção máxima no cofre:
+              </label>
+              <select
+                id="backup-max-retention"
+                value={scheduleDraft.maxRetention}
+                onChange={(e) =>
+                  setScheduleDraft((prev) => ({
+                    ...prev,
+                    maxRetention: Number(e.target.value) || 20,
+                  }))
+                }
+                className="px-2.5 py-1.5 bg-[#FAFAFA] border border-zinc-300 rounded-lg text-xs font-mono font-bold text-zinc-900 cursor-pointer"
+              >
+                <option value={10}>10 backups</option>
+                <option value={15}>15 backups</option>
+                <option value={20}>20 backups</option>
+                <option value={30}>30 backups</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Unexpected Browser Close & Catch-up Safeguards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+          <label
+            htmlFor="backup-auto-exit"
+            className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-zinc-200 hover:border-zinc-300 cursor-pointer"
+          >
+            <input
+              id="backup-auto-exit"
+              type="checkbox"
+              checked={scheduleDraft.autoBackupOnExit}
+              onChange={(e) =>
+                setScheduleDraft((prev) => ({
+                  ...prev,
+                  autoBackupOnExit: e.target.checked,
+                }))
+              }
+              className="mt-0.5 rounded border-zinc-300 accent-zinc-950"
+            />
+            <span className="text-xs leading-relaxed">
+              <strong className="text-zinc-900 block">
+                Backup automático ao fechar ou sair do navegador
+              </strong>
+              <span className="text-zinc-500">
+                Salva um ponto de restauração verificado por checksum em caso de fechamento inesperado (somente se houver alterações novas).
+              </span>
+            </span>
+          </label>
+
+          <label
+            htmlFor="backup-catchup-reopen"
+            className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-zinc-200 hover:border-zinc-300 cursor-pointer"
+          >
+            <input
+              id="backup-catchup-reopen"
+              type="checkbox"
+              checked={scheduleDraft.runMissedOnReopen}
+              onChange={(e) =>
+                setScheduleDraft((prev) => ({
+                  ...prev,
+                  runMissedOnReopen: e.target.checked,
+                }))
+              }
+              className="mt-0.5 rounded border-zinc-300 accent-zinc-950"
+            />
+            <span className="text-xs leading-relaxed">
+              <strong className="text-zinc-900 block">
+                Recuperar backup pendente ao reabrir o painel
+              </strong>
+              <span className="text-zinc-500">
+                Se o navegador estava fechado no horário programado, executa o backup automaticamente assim que o sistema for reaberto.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        {scheduleError && (
+          <div
+            role="alert"
+            className="rounded-xl bg-rose-50 border border-rose-200 px-3.5 py-2.5 text-xs font-bold text-rose-800 flex items-center gap-2"
+          >
+            <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{scheduleError}</span>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+          <button
+            type="button"
+            onClick={handleRunScheduledBackupNow}
+            className="px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <Play className="w-3.5 h-3.5" />
+            <span>Executar Agendado Agora</span>
+          </button>
+
+          <div className="flex items-center gap-2">
+            {hasUnsavedScheduleChanges && (
+              <span className="text-[11px] font-bold text-amber-700">
+                Alterações pendentes
+              </span>
+            )}
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Salvar Agendamento</span>
+            </button>
+          </div>
+        </div>
+      </form>
 
       {/* Create New Snapshot Bar */}
       <form
@@ -572,7 +1118,10 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       ) : (
         <div className="space-y-3">
           {filteredBackups.map((snap) => {
-            const triggerMeta = SITE_BACKUP_TRIGGER_META[snap.trigger];
+            const triggerMeta =
+              SITE_BACKUP_TRIGGER_META[snap.trigger] ||
+              SITE_BACKUP_TRIGGER_META.manual;
+            const integrity = verifySiteBackupIntegrity(snap);
             const isConfirmingRestore = confirmRestoreId === snap.id;
             const isConfirmingDelete = confirmDeleteId === snap.id;
             const createdTime = new Date(snap.createdAt).toLocaleTimeString(
@@ -610,6 +1159,24 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
                           className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${triggerMeta.badgeClass}`}
                         >
                           {triggerMeta.label}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md border font-mono text-[10px] font-extrabold inline-flex items-center gap-1 ${
+                            integrity.valid
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : 'bg-rose-50 text-rose-800 border-rose-200'
+                          }`}
+                        >
+                          {integrity.valid ? (
+                            <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <ShieldAlert className="w-3 h-3 text-rose-600" />
+                          )}
+                          <span>
+                            {integrity.valid
+                              ? `Integridade OK · #${integrity.computedChecksum}`
+                              : 'Integridade Comprometida'}
+                          </span>
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-zinc-100 border border-zinc-200 font-mono text-[10px] font-bold text-zinc-700 tabular-nums">
                           {formatBackupByteSize(snap.summary.sizeBytes)}

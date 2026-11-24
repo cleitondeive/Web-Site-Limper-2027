@@ -2,6 +2,7 @@ import {
   AdminAppTab,
   AdminRoleLevel,
   AdminUser,
+  BackupScheduleConfig,
   CartItem,
   CatalogSortOption,
   Category,
@@ -25,6 +26,7 @@ import {
   SecurityEventCategory,
   SecurityEventOutcome,
   SecurityLogDatePreset,
+  SiteBackupIntegrityResult,
   SiteBackupPayload,
   SiteBackupSnapshot,
   SiteBackupTrigger,
@@ -2876,6 +2878,14 @@ export const SITE_BACKUP_TRIGGER_META: Record<
     label: 'Automático Diário',
     badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
   },
+  auto_scheduled: {
+    label: 'Agendado Automático',
+    badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+  },
+  auto_shutdown: {
+    label: 'Proteção ao Fechar Navegador',
+    badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-300',
+  },
   pre_restore: {
     label: 'Segurança Pré-Restauração',
     badgeClass: 'bg-zinc-900 text-[#FFBE00] border-zinc-900',
@@ -2885,6 +2895,70 @@ export const SITE_BACKUP_TRIGGER_META: Record<
     badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   },
 };
+
+export function computePayloadChecksum(payload: SiteBackupPayload): string {
+  // Exclude volatile securityLogs from business-data checksum so log entries alone do not trigger redundant exit backups
+  const canonicalPayload = {
+    categories: payload.categories || [],
+    products: payload.products || [],
+    deletedProducts: payload.deletedProducts || [],
+    kits: payload.kits || [],
+    coupons: payload.coupons || [],
+    banners: payload.banners || [],
+    orders: payload.orders || [],
+    settings: payload.settings || {},
+    adminUsers: payload.adminUsers || [],
+  };
+  const serialized = JSON.stringify(canonicalPayload);
+  // Deterministic 32-bit FNV-1a hash (synchronous, zero async overhead during pagehide/beforeunload)
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < serialized.length; i += 1) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).toUpperCase().padStart(8, '0');
+}
+
+export function verifySiteBackupIntegrity(
+  snapshot: SiteBackupSnapshot
+): SiteBackupIntegrityResult {
+  const issues: string[] = [];
+  const payload = snapshot?.payload;
+  if (!payload || typeof payload !== 'object') {
+    return {
+      valid: false,
+      expectedChecksum: snapshot?.checksum,
+      computedChecksum: '00000000',
+      issues: ['Estrutura de dados do backup ausente ou corrompida.'],
+    };
+  }
+  if (!Array.isArray(payload.categories)) issues.push('Lista de categorias inválida.');
+  if (!Array.isArray(payload.products)) issues.push('Lista de produtos inválida.');
+  if (!Array.isArray(payload.orders)) issues.push('Lista de pedidos inválida.');
+  if (!payload.settings || typeof payload.settings !== 'object') {
+    issues.push('Configurações da loja ausentes.');
+  }
+  if (
+    !Array.isArray(payload.adminUsers) ||
+    !payload.adminUsers.some((u) => u && u.role === 'master' && u.active)
+  ) {
+    issues.push('Nenhum usuário Master ativo encontrado no snapshot.');
+  }
+
+  const computedChecksum = computePayloadChecksum(payload);
+  if (snapshot.checksum && snapshot.checksum !== computedChecksum) {
+    issues.push(
+      `Assinatura de integridade divergente (esperado #${snapshot.checksum}, calculado #${computedChecksum}).`
+    );
+  }
+
+  return {
+    valid: issues.length === 0,
+    expectedChecksum: snapshot.checksum,
+    computedChecksum,
+    issues,
+  };
+}
 
 export function formatBackupByteSize(bytes: number): string {
   const safe = Math.max(0, Number.isFinite(bytes) ? bytes : 0);
@@ -2902,6 +2976,7 @@ export function createSiteBackupSnapshot(
     trigger?: SiteBackupTrigger;
     createdBy: string;
     createdByUsername?: string;
+    scheduleSlotKey?: string;
   },
   nowMs: number = Date.now()
 ): SiteBackupSnapshot {
@@ -2909,9 +2984,16 @@ export function createSiteBackupSnapshot(
   const createdAt = nowDate.toISOString();
   const dateKey = toDateKeyYmd(nowDate, true);
   const trigger: SiteBackupTrigger = params.trigger || 'manual';
+  const timeShort = `${String(nowDate.getHours()).padStart(2, '0')}:${String(
+    nowDate.getMinutes()
+  ).padStart(2, '0')}`;
   const defaultLabel =
     trigger === 'pre_restore'
       ? `Ponto de segurança antes de restauração (${formatBrDateFromYmd(dateKey)})`
+      : trigger === 'auto_scheduled'
+      ? `Backup agendado automático · ${timeShort} (${formatBrDateFromYmd(dateKey)})`
+      : trigger === 'auto_shutdown'
+      ? `Proteção automática ao encerrar navegador · ${timeShort}`
       : trigger === 'imported'
       ? `Backup importado (${formatBrDateFromYmd(dateKey)})`
       : `Backup completo do site · ${formatBrDateFromYmd(dateKey)}`;
@@ -2921,6 +3003,7 @@ export function createSiteBackupSnapshot(
     JSON.stringify(params.payload)
   ) as SiteBackupPayload;
   const serializedSize = JSON.stringify(clonedPayload).length;
+  const checksum = computePayloadChecksum(clonedPayload);
   const suffix = Math.random().toString(36).slice(2, 6);
 
   return {
@@ -2933,6 +3016,8 @@ export function createSiteBackupSnapshot(
     createdByUsername: params.createdByUsername
       ? params.createdByUsername.trim().toLowerCase().replace(/^@/, '')
       : undefined,
+    checksum,
+    scheduleSlotKey: params.scheduleSlotKey,
     summary: {
       categoriesCount: clonedPayload.categories.length,
       productsCount: clonedPayload.products.length,
@@ -3871,6 +3956,243 @@ export function emptyProductTrash(trash: DeletedProductEntry[]): {
     removedCount: trash.length,
   };
 }
+
+// ============================================================================
+// SCHEDULED AUTOMATIC DATABASE BACKUP ENGINE & UNEXPECTED-CLOSE INTEGRITY
+// ============================================================================
+
+export const WEEKDAY_SHORT_LABELS: { day: number; label: string; fullName: string }[] = [
+  { day: 0, label: 'Dom', fullName: 'Domingo' },
+  { day: 1, label: 'Seg', fullName: 'Segunda-feira' },
+  { day: 2, label: 'Ter', fullName: 'Terça-feira' },
+  { day: 3, label: 'Qua', fullName: 'Quarta-feira' },
+  { day: 4, label: 'Qui', fullName: 'Quinta-feira' },
+  { day: 5, label: 'Sex', fullName: 'Sexta-feira' },
+  { day: 6, label: 'Sáb', fullName: 'Sábado' },
+];
+
+export const DEFAULT_BACKUP_SCHEDULE_CONFIG: BackupScheduleConfig = {
+  enabled: false,
+  times: ['09:00', '18:00'],
+  daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+  maxRetention: MAX_STORED_SITE_BACKUPS,
+  autoBackupOnExit: true,
+  runMissedOnReopen: true,
+};
+
+export function normalizeScheduleTime(raw: string): string | null {
+  const trimmed = (raw || '').trim();
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hh = Number.parseInt(match[1], 10);
+  const mm = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+    return null;
+  }
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+export function sortAndDedupeScheduleTimes(
+  times: string[],
+  maxSlots: number = 8
+): string[] {
+  const unique = new Set<string>();
+  for (const t of times) {
+    const norm = normalizeScheduleTime(t);
+    if (norm) unique.add(norm);
+  }
+  return Array.from(unique).sort().slice(0, maxSlots);
+}
+
+export function validateBackupScheduleConfig(
+  config: BackupScheduleConfig
+): CrudValidationResult {
+  const cleanTimes = sortAndDedupeScheduleTimes(config.times || []);
+  const cleanDays = Array.from(
+    new Set(
+      (config.daysOfWeek || []).filter(
+        (d) => Number.isInteger(d) && d >= 0 && d <= 6
+      )
+    )
+  ).sort((a, b) => a - b);
+
+  if (config.enabled) {
+    if (cleanTimes.length === 0) {
+      return {
+        valid: false,
+        error: 'Adicione pelo menos 1 horário válido (HH:MM) para ativar o agendamento.',
+      };
+    }
+    if (cleanDays.length === 0) {
+      return {
+        valid: false,
+        error: 'Selecione pelo menos 1 dia da semana para executar os backups automáticos.',
+      };
+    }
+  }
+  if (
+    !Number.isFinite(config.maxRetention) ||
+    config.maxRetention < 5 ||
+    config.maxRetention > 30
+  ) {
+    return {
+      valid: false,
+      error: 'A retenção máxima deve ficar entre 5 e 30 backups armazenados.',
+    };
+  }
+  return { valid: true };
+}
+
+export interface DueScheduledBackupResult {
+  isDue: boolean;
+  slotTime?: string;
+  slotKey?: string;
+  isCatchUp?: boolean;
+}
+
+/**
+ * Evaluates whether a scheduled automatic backup should execute right now.
+ * Handles both exact scheduled-minute execution and missed-slot catch-up when the browser
+ * was closed unexpectedly during a configured time slot.
+ */
+export function evaluateDueScheduledBackup(
+  config: BackupScheduleConfig,
+  nowMs: number = Date.now(),
+  existingBackups: Pick<SiteBackupSnapshot, 'scheduleSlotKey'>[] = []
+): DueScheduledBackupResult {
+  if (!config.enabled) return { isDue: false };
+
+  const now = new Date(nowMs);
+  const weekday = now.getDay();
+  if (!config.daysOfWeek.includes(weekday)) return { isDue: false };
+
+  const sortedTimes = sortAndDedupeScheduleTimes(config.times);
+  if (sortedTimes.length === 0) return { isDue: false };
+
+  const dateKey = toDateKeyYmd(now, true);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Find the latest scheduled slot today that is <= current time
+  let latestDueSlot: { time: string; minutes: number } | null = null;
+  for (const time of sortedTimes) {
+    const [hh, mm] = time.split(':').map((n) => Number.parseInt(n, 10));
+    const slotMinutes = hh * 60 + mm;
+    if (slotMinutes <= currentMinutes) {
+      latestDueSlot = { time, minutes: slotMinutes };
+    }
+  }
+
+  if (!latestDueSlot) return { isDue: false };
+
+  const slotKey = `${dateKey}@${latestDueSlot.time}`;
+  const alreadyRecordedInConfig = config.lastExecutedSlotKey === slotKey;
+  const alreadyStoredInVault = existingBackups.some(
+    (b) => b.scheduleSlotKey === slotKey
+  );
+  if (alreadyRecordedInConfig || alreadyStoredInVault) {
+    return { isDue: false };
+  }
+
+  const minutesLate = currentMinutes - latestDueSlot.minutes;
+  // Exact window: within 0..2 minutes of the scheduled time
+  if (minutesLate <= 2) {
+    return {
+      isDue: true,
+      slotTime: latestDueSlot.time,
+      slotKey,
+      isCatchUp: false,
+    };
+  }
+
+  // Missed slot while browser was closed: run catch-up immediately if enabled
+  if (config.runMissedOnReopen) {
+    return {
+      isDue: true,
+      slotTime: latestDueSlot.time,
+      slotKey,
+      isCatchUp: true,
+    };
+  }
+
+  return { isDue: false };
+}
+
+export interface NextScheduledBackupInfo {
+  nextDateKey: string;
+  nextTime: string;
+  minutesUntil: number;
+  label: string;
+}
+
+export function getNextScheduledBackupInfo(
+  config: BackupScheduleConfig,
+  nowMs: number = Date.now()
+): NextScheduledBackupInfo | null {
+  if (!config.enabled) return null;
+  const sortedTimes = sortAndDedupeScheduleTimes(config.times);
+  if (sortedTimes.length === 0 || config.daysOfWeek.length === 0) return null;
+
+  const now = new Date(nowMs);
+  const todayKey = toDateKeyYmd(now, true);
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const tomorrowKey = toDateKeyYmd(tomorrow, true);
+
+  for (let dayOffset = 0; dayOffset <= 7; dayOffset += 1) {
+    const candidateDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + dayOffset,
+      0,
+      0,
+      0,
+      0
+    );
+    if (!config.daysOfWeek.includes(candidateDay.getDay())) continue;
+    const candidateDateKey = toDateKeyYmd(candidateDay, true);
+
+    for (const time of sortedTimes) {
+      const [hh, mm] = time.split(':').map((n) => Number.parseInt(n, 10));
+      const slotDate = new Date(
+        candidateDay.getFullYear(),
+        candidateDay.getMonth(),
+        candidateDay.getDate(),
+        hh,
+        mm,
+        0,
+        0
+      );
+      const diffMs = slotDate.getTime() - nowMs;
+      const slotKey = `${candidateDateKey}@${time}`;
+      if (diffMs > 0 && config.lastExecutedSlotKey !== slotKey) {
+        const minutesUntil = Math.max(1, Math.ceil(diffMs / 60000));
+        let dayPrefix = `${
+          WEEKDAY_SHORT_LABELS[candidateDay.getDay()]?.label || ''
+        } (${formatBrDateFromYmd(candidateDateKey).slice(0, 5)})`;
+        if (candidateDateKey === todayKey) dayPrefix = 'Hoje';
+        else if (candidateDateKey === tomorrowKey) dayPrefix = 'Amanhã';
+
+        const hoursPart = Math.floor(minutesUntil / 60);
+        const minsPart = minutesUntil % 60;
+        const countdown =
+          hoursPart > 0
+            ? minsPart > 0
+              ? `em ${hoursPart}h ${minsPart}min`
+              : `em ${hoursPart}h`
+            : `em ${minsPart}min`;
+
+        return {
+          nextDateKey: candidateDateKey,
+          nextTime: time,
+          minutesUntil,
+          label: `${dayPrefix} às ${time} (${countdown})`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 
 
 

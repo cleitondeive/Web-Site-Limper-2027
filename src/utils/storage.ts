@@ -1,5 +1,6 @@
 import {
   AdminUser,
+  BackupScheduleConfig,
   CartItem,
   Category,
   CustomerProfile,
@@ -13,7 +14,11 @@ import {
   SiteBackupSnapshot,
   StoreSettings,
 } from '../types/commerce';
-import { DEFAULT_ADMIN_USERS } from './commerce';
+import {
+  DEFAULT_ADMIN_USERS,
+  DEFAULT_BACKUP_SCHEDULE_CONFIG,
+  sortAndDedupeScheduleTimes,
+} from './commerce';
 import {
   INITIAL_BANNERS,
   INITIAL_CATEGORIES,
@@ -38,6 +43,7 @@ const STORAGE_KEYS = {
   SECURITY_LOGS: 'limper_mt_security_logs_v1',
   ADMIN_USERS: 'limper_mt_admin_users_v1',
   SITE_BACKUPS: 'limper_mt_site_backups_v1',
+  BACKUP_SCHEDULE: 'limper_mt_backup_schedule_v1',
   DELETED_PRODUCTS: 'limper_mt_deleted_products_v1',
 };
 
@@ -335,7 +341,61 @@ export const storageService = {
       }
     }
   },
+  saveSiteBackupsSyncEmergency: (backups: SiteBackupSnapshot[]): boolean => {
+    if (typeof window === 'undefined') return false;
+    // During pagehide/beforeunload, commit synchronously to localStorage FIRST so data survives abrupt close
+    let persistedSync = false;
+    for (let count = backups.length; count >= 1; count--) {
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEYS.SITE_BACKUPS,
+          JSON.stringify(backups.slice(0, count))
+        );
+        persistedSync = true;
+        break;
+      } catch {
+        // Shrink mirror count until it fits synchronously
+      }
+    }
+    // Also enqueue IndexedDB mirror as best-effort secondary durable store
+    syncToIndexedDB(STORAGE_KEYS.SITE_BACKUPS, backups);
+    return persistedSync;
+  },
+  getBackupSchedule: (): BackupScheduleConfig => {
+    const loaded = loadFromStorage<Partial<BackupScheduleConfig>>(
+      STORAGE_KEYS.BACKUP_SCHEDULE,
+      DEFAULT_BACKUP_SCHEDULE_CONFIG
+    );
+    const merged: BackupScheduleConfig = {
+      ...DEFAULT_BACKUP_SCHEDULE_CONFIG,
+      ...(loaded && typeof loaded === 'object' ? loaded : {}),
+    };
+    return {
+      ...merged,
+      times: Array.isArray(merged.times)
+        ? sortAndDedupeScheduleTimes(merged.times)
+        : DEFAULT_BACKUP_SCHEDULE_CONFIG.times,
+      daysOfWeek: Array.isArray(merged.daysOfWeek)
+        ? Array.from(
+            new Set(
+              merged.daysOfWeek.filter(
+                (d) => Number.isInteger(d) && d >= 0 && d <= 6
+              )
+            )
+          ).sort((a, b) => a - b)
+        : DEFAULT_BACKUP_SCHEDULE_CONFIG.daysOfWeek,
+      maxRetention:
+        Number.isFinite(merged.maxRetention) &&
+        merged.maxRetention >= 5 &&
+        merged.maxRetention <= 30
+          ? Math.round(merged.maxRetention)
+          : DEFAULT_BACKUP_SCHEDULE_CONFIG.maxRetention,
+    };
+  },
+  saveBackupSchedule: (config: BackupScheduleConfig) =>
+    saveToStorage(STORAGE_KEYS.BACKUP_SCHEDULE, config),
 };
+
 
 
 

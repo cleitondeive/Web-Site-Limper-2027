@@ -64,6 +64,7 @@ import {
 import {
   AdminAppTab,
   AdminUser,
+  BackupScheduleConfig,
   BannerSlotType,
   BannerThemeType,
   Category,
@@ -90,6 +91,7 @@ import {
   ADMIN_PRODUCTS_PAGE_SIZE,
   ADMIN_ROLE_META,
   DEFAULT_ADMIN_USERS,
+  DEFAULT_BACKUP_SCHEDULE_CONFIG,
   DEFAULT_HIGHLIGHT_BADGE_COLOR,
   DEFAULT_PROMO_BADGE_COLOR,
   ORDER_STATUS_META,
@@ -172,6 +174,7 @@ interface AdminDashboardProps {
   securityLogs?: SecurityAuditEvent[];
   adminUsers?: AdminUser[];
   siteBackups?: SiteBackupSnapshot[];
+  backupSchedule?: BackupScheduleConfig;
   isolationContext?: {
     customerProfile: CustomerProfile;
     sessionOrderIds: string[];
@@ -181,6 +184,7 @@ interface AdminDashboardProps {
   onClearSecurityLogs?: () => void;
   onSaveAdminUsers?: (users: AdminUser[]) => void;
   onSaveSiteBackups?: (backups: SiteBackupSnapshot[]) => void;
+  onSaveBackupSchedule?: (schedule: BackupScheduleConfig) => void;
   onRestoreSiteBackup?: (snapshot: SiteBackupSnapshot) => void;
   onSaveCategories: (categories: Category[]) => void;
   onSaveProducts: (products: Product[]) => void;
@@ -210,6 +214,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   securityLogs = [],
   adminUsers: adminUsersProp,
   siteBackups: siteBackupsProp,
+  backupSchedule: backupScheduleProp,
   isolationContext = {
     customerProfile: DEFAULT_CUSTOMER_PROFILE,
     sessionOrderIds: [],
@@ -219,6 +224,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onClearSecurityLogs,
   onSaveAdminUsers,
   onSaveSiteBackups,
+  onSaveBackupSchedule,
   onRestoreSiteBackup,
   onSaveCategories,
   onSaveProducts,
@@ -233,9 +239,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     () => DEFAULT_ADMIN_USERS
   );
   const [fallbackSiteBackups, setFallbackSiteBackups] = useState<SiteBackupSnapshot[]>([]);
+  const [fallbackBackupSchedule, setFallbackBackupSchedule] =
+    useState<BackupScheduleConfig>(() => DEFAULT_BACKUP_SCHEDULE_CONFIG);
   const effectiveAdminUsers =
     adminUsersProp && adminUsersProp.length > 0 ? adminUsersProp : fallbackAdminUsers;
   const effectiveSiteBackups = siteBackupsProp ?? fallbackSiteBackups;
+  const effectiveBackupSchedule = backupScheduleProp ?? fallbackBackupSchedule;
 
   const persistAdminUsers = (updated: AdminUser[]) => {
     if (onSaveAdminUsers) {
@@ -250,6 +259,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onSaveSiteBackups(updated);
     } else {
       setFallbackSiteBackups(updated);
+    }
+  };
+
+  const persistBackupSchedule = (updated: BackupScheduleConfig) => {
+    if (onSaveBackupSchedule) {
+      onSaveBackupSchedule(updated);
+    } else {
+      setFallbackBackupSchedule(updated);
     }
   };
 
@@ -8298,9 +8315,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               initialActorFilter={securityActorFilter}
               onClearInitialActorFilter={() => setSecurityActorFilter('')}
               siteBackups={effectiveSiteBackups}
+              backupSchedule={effectiveBackupSchedule}
               currentSitePayload={{
                 categories,
                 products,
+                deletedProducts,
                 kits,
                 coupons,
                 banners,
@@ -8310,6 +8329,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 securityLogs,
               }}
               onSaveSiteBackups={persistSiteBackups}
+              onSaveBackupSchedule={persistBackupSchedule}
               onRestoreSiteBackup={handleRestoreBackupSnapshot}
               onAutoRepairCatalog={handleAutoRepairCatalog}
               isolationContext={isolationContext}
