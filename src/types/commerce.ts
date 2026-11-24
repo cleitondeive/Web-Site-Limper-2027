@@ -455,6 +455,25 @@ export interface SiteBackupSnapshot {
   payload: SiteBackupPayload;
 }
 
+export type BackupReminderStyle = 'toast' | 'modal';
+
+export interface BackupReminderConfig {
+  enabled: boolean;
+  thresholdHours: number; // default 24h
+  style: BackupReminderStyle;
+  snoozedUntil?: string; // ISO timestamp until which reminder is snoozed
+}
+
+export interface BackupReminderEvaluation {
+  shouldNotify: boolean;
+  reason: 'disabled' | 'snoozed' | 'recent_backup' | 'never_backed_up' | 'overdue';
+  style: BackupReminderStyle;
+  thresholdHours: number;
+  lastBackupAt: string | null;
+  hoursSinceLastBackup: number | null;
+  humanElapsedLabel: string;
+}
+
 export interface BackupScheduleConfig {
   enabled: boolean;
   times: string[]; // Sorted unique HH:mm 24h strings (e.g. ["09:00", "18:00"])
@@ -462,6 +481,7 @@ export interface BackupScheduleConfig {
   maxRetention: number; // Max snapshots retained (5..30)
   autoBackupOnExit: boolean; // Emergency snapshot on pagehide/beforeunload/tab-hide when data changed
   runMissedOnReopen: boolean; // Run catch-up backup on reopen if browser was closed during a scheduled slot
+  reminder?: BackupReminderConfig;
   lastExecutedSlotKey?: string;
   lastExecutedAt?: string;
   lastShutdownBackupAt?: string;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowDown,
@@ -64,6 +64,7 @@ import {
 import {
   AdminAppTab,
   AdminUser,
+  BackupReminderStyle,
   BackupScheduleConfig,
   BannerSlotType,
   BannerThemeType,
@@ -91,19 +92,24 @@ import {
   ADMIN_PRODUCTS_PAGE_SIZE,
   ADMIN_ROLE_META,
   DEFAULT_ADMIN_USERS,
+  DEFAULT_BACKUP_REMINDER_CONFIG,
   DEFAULT_BACKUP_SCHEDULE_CONFIG,
   DEFAULT_HIGHLIGHT_BADGE_COLOR,
   DEFAULT_PROMO_BADGE_COLOR,
   ORDER_STATUS_META,
+  appendSiteBackupSnapshot,
   authenticateAdminUser,
   autoRepairCatalogIntegrity,
   canAdminUserAccessTab,
+  createSiteBackupSnapshot,
   duplicateMultipleProducts,
   duplicateProductItem,
   emptyProductTrash,
+  evaluateBackupReminderStatus,
   filterOrdersByCriteria,
   formatAdminActorLabel,
   formatAdminDashboardDateTime,
+  formatBackupByteSize,
   formatBrDateFromYmd,
   formatCurrency,
   formatLogisticsModeLabel,
@@ -157,6 +163,7 @@ import { AdminCommandPalette } from './AdminCommandPalette';
 import { AdminSecurityTab } from './AdminSecurityTab';
 import { AdminUserAvatar, AdminUsersTab } from './AdminUsersTab';
 import { BadgeColorPicker } from './BadgeColorPicker';
+import { BackupReminderNotification } from './BackupReminderNotification';
 import {
   ProductDeleteConfirmModal,
   ProductTrashPanel,
@@ -268,6 +275,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } else {
       setFallbackBackupSchedule(updated);
     }
+    if (updated.reminder?.enabled && !updated.reminder.snoozedUntil) {
+      setReminderDismissedForSession(false);
+    }
   };
 
   const handleRestoreBackupSnapshot = (snapshot: SiteBackupSnapshot) => {
@@ -308,6 +318,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loginPass, setLoginPass] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [reminderDismissedForSession, setReminderDismissedForSession] = useState(false);
+  const [previewReminderStyle, setPreviewReminderStyle] =
+    useState<BackupReminderStyle | null>(null);
+  const [reminderClockTick, setReminderClockTick] = useState<number>(() => Date.now());
+  const [quickBackupFeedback, setQuickBackupFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    setReminderClockTick(Date.now());
+    const timer = window.setInterval(() => {
+      setReminderClockTick(Date.now());
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!quickBackupFeedback) return;
+    const timer = window.setTimeout(() => setQuickBackupFeedback(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [quickBackupFeedback]);
+
+  const backupReminderEval = useMemo(
+    () =>
+      evaluateBackupReminderStatus(
+        effectiveBackupSchedule.reminder,
+        effectiveSiteBackups,
+        reminderClockTick
+      ),
+    [effectiveBackupSchedule.reminder, effectiveSiteBackups, reminderClockTick]
+  );
 
   // Inline CRUD Form Validation & Feedback States
   const [productFormError, setProductFormError] = useState<string | null>(null);
@@ -582,6 +622,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setActiveTab(firstAllowedTab);
       setIsAuthenticated(true);
       setIsMobileNavOpen(false);
+      setReminderDismissedForSession(false);
+      setPreviewReminderStyle(null);
+      setReminderClockTick(Date.now());
       setLoginError(null);
       setLoginPass('');
 
@@ -643,8 +686,107 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setSessionStartedAt(null);
     setSecurityActorFilter('');
     setIsMobileNavOpen(false);
+    setReminderDismissedForSession(false);
+    setPreviewReminderStyle(null);
     setLoginPass('');
     setLoginError(null);
+  };
+
+  const handleQuickBackupFromReminder = () => {
+    const actorLabel = formatAdminActorLabel(currentAdminUser);
+    const snapshot = createSiteBackupSnapshot({
+      payload: {
+        categories,
+        products,
+        deletedProducts,
+        kits,
+        coupons,
+        banners,
+        orders,
+        settings,
+        adminUsers: effectiveAdminUsers,
+        securityLogs,
+      },
+      trigger: 'manual',
+      label: 'Backup rápido via lembrete de segurança',
+      createdBy: actorLabel,
+      createdByUsername: currentAdminUser?.username,
+    });
+    const nextBackups = appendSiteBackupSnapshot(
+      effectiveSiteBackups,
+      snapshot,
+      effectiveBackupSchedule.maxRetention
+    );
+    persistSiteBackups(nextBackups);
+
+    if (effectiveBackupSchedule.reminder?.snoozedUntil) {
+      persistBackupSchedule({
+        ...effectiveBackupSchedule,
+        reminder: {
+          ...DEFAULT_BACKUP_REMINDER_CONFIG,
+          ...effectiveBackupSchedule.reminder,
+          snoozedUntil: undefined,
+        },
+      });
+    }
+
+    setPreviewReminderStyle(null);
+    setReminderDismissedForSession(false);
+    setReminderClockTick(Date.now());
+
+    recordAdminAction({
+      category: 'site_backup',
+      outcome: 'allowed',
+      rawTarget: `Snapshot ${snapshot.id} · ${formatBrDateFromYmd(snapshot.dateKey)}`,
+      summary: 'Backup criado via lembrete de segurança',
+      detail: `Snapshot completo (${formatBackupByteSize(
+        snapshot.summary.sizeBytes
+      )} · checksum ${snapshot.checksum || 'verificado'}) salvo em 1 clique pelo lembrete de backup.`,
+    });
+
+    setQuickBackupFeedback(
+      `Backup completo salvo com sucesso! Integridade verificada (${snapshot.checksum || 'OK'}).`
+    );
+  };
+
+  const handleSnoozeBackupReminder = () => {
+    if (previewReminderStyle !== null) {
+      setPreviewReminderStyle(null);
+      return;
+    }
+    const snoozedUntil = new Date(Date.now() + 4 * 3_600_000).toISOString();
+    persistBackupSchedule({
+      ...effectiveBackupSchedule,
+      reminder: {
+        ...DEFAULT_BACKUP_REMINDER_CONFIG,
+        ...(effectiveBackupSchedule.reminder || {}),
+        snoozedUntil,
+      },
+    });
+    setReminderClockTick(Date.now());
+    recordAdminAction({
+      category: 'site_backup',
+      outcome: 'info',
+      rawTarget: 'Lembrete de backup',
+      summary: 'Lembrete de backup adiado por 4 horas',
+      detail: 'Administrador adiou temporariamente a notificação de backup desatualizado.',
+    });
+  };
+
+  const handleOpenBackupVaultFromReminder = () => {
+    const activeStyle = previewReminderStyle ?? backupReminderEval.style;
+    setPreviewReminderStyle(null);
+    if (activeStyle === 'modal') {
+      setReminderDismissedForSession(true);
+    }
+    setActiveTab('security');
+    window.setTimeout(() => {
+      (
+        document.getElementById('admin-backup-reminder-settings') ||
+        document.getElementById('admin-backup-scheduler') ||
+        document.getElementById('admin-backup-vault')
+      )?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 90);
   };
 
   const handleMoveOrderStatus = (
@@ -8330,6 +8472,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }}
               onSaveSiteBackups={persistSiteBackups}
               onSaveBackupSchedule={persistBackupSchedule}
+              onPreviewBackupReminder={(style) => setPreviewReminderStyle(style)}
               onRestoreSiteBackup={handleRestoreBackupSnapshot}
               onAutoRepairCatalog={handleAutoRepairCatalog}
               isolationContext={isolationContext}
@@ -8557,6 +8700,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onConfirm={handleConfirmDeleteProducts}
         onCancel={() => setPendingDeleteProductIds([])}
       />
+
+      {/* BACKUP REMINDER NOTIFICATION (TOAST OR MODAL WHEN LAST BACKUP > THRESHOLD) */}
+      {isAuthenticated &&
+        currentAdminUser?.role === 'master' &&
+        (previewReminderStyle !== null ||
+          (backupReminderEval.shouldNotify && !reminderDismissedForSession)) && (
+          <BackupReminderNotification
+            evaluation={backupReminderEval}
+            styleOverride={previewReminderStyle}
+            isPreview={previewReminderStyle !== null}
+            onBackupNow={handleQuickBackupFromReminder}
+            onOpenBackupVault={handleOpenBackupVaultFromReminder}
+            onSnooze={handleSnoozeBackupReminder}
+            onDismiss={() => {
+              if (previewReminderStyle !== null) {
+                setPreviewReminderStyle(null);
+              } else {
+                setReminderDismissedForSession(true);
+              }
+            }}
+          />
+        )}
+
+      {/* 1-CLICK QUICK BACKUP CONFIRMATION TOAST */}
+      {quickBackupFeedback && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-5 right-5 z-40 max-w-sm bg-emerald-950 text-emerald-50 border border-emerald-500/60 rounded-2xl shadow-xl px-4 py-3 flex items-center gap-2.5 text-xs font-bold no-print"
+        >
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="leading-snug">{quickBackupFeedback}</span>
+          <button
+            type="button"
+            onClick={() => setQuickBackupFeedback(null)}
+            aria-label="Fechar confirmação de backup"
+            className="p-1 rounded-lg text-emerald-300 hover:text-white hover:bg-emerald-900 cursor-pointer shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </section>
   </div>
   );

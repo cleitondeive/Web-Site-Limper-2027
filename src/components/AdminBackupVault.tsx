@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BellRing,
   Calendar,
   CalendarClock,
   CheckCircle2,
@@ -22,17 +23,21 @@ import {
 } from 'lucide-react';
 import {
   AdminUser,
+  BackupReminderConfig,
+  BackupReminderStyle,
   BackupScheduleConfig,
   CreateSecurityAuditEventInput,
   SiteBackupPayload,
   SiteBackupSnapshot,
 } from '../types/commerce';
 import {
+  DEFAULT_BACKUP_REMINDER_CONFIG,
   DEFAULT_BACKUP_SCHEDULE_CONFIG,
   SITE_BACKUP_TRIGGER_META,
   WEEKDAY_SHORT_LABELS,
   appendSiteBackupSnapshot,
   createSiteBackupSnapshot,
+  evaluateBackupReminderStatus,
   filterSiteBackupsByDate,
   formatAdminActorLabel,
   formatBackupByteSize,
@@ -55,6 +60,7 @@ interface AdminBackupVaultProps {
   onClearExternalDateFilter?: () => void;
   onSaveBackups: (backups: SiteBackupSnapshot[]) => void;
   onSaveBackupSchedule?: (schedule: BackupScheduleConfig) => void;
+  onPreviewBackupReminder?: (style: BackupReminderStyle) => void;
   onRestoreBackup: (snapshot: SiteBackupSnapshot) => void;
   onRecordSecurityEvent: (input: CreateSecurityAuditEventInput) => void;
 }
@@ -70,6 +76,7 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
   onClearExternalDateFilter,
   onSaveBackups,
   onSaveBackupSchedule,
+  onPreviewBackupReminder,
   onRestoreBackup,
   onRecordSecurityEvent,
 }) => {
@@ -100,6 +107,10 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       lastExecutedSlotKey: backupSchedule.lastExecutedSlotKey ?? prev.lastExecutedSlotKey,
       lastShutdownBackupAt:
         backupSchedule.lastShutdownBackupAt ?? prev.lastShutdownBackupAt,
+      reminder: {
+        ...DEFAULT_BACKUP_REMINDER_CONFIG,
+        ...(backupSchedule.reminder || {}),
+      },
     }));
   }, [backupSchedule]);
 
@@ -107,6 +118,21 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
     const timer = window.setInterval(() => setClockTick(Date.now()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const draftReminder: BackupReminderConfig = {
+    ...DEFAULT_BACKUP_REMINDER_CONFIG,
+    ...(scheduleDraft.reminder || {}),
+  };
+
+  const savedReminder: BackupReminderConfig = {
+    ...DEFAULT_BACKUP_REMINDER_CONFIG,
+    ...(backupSchedule.reminder || {}),
+  };
+
+  const savedReminderEval = useMemo(
+    () => evaluateBackupReminderStatus(backupSchedule.reminder, backups, clockTick),
+    [backupSchedule.reminder, backups, clockTick]
+  );
 
   const nextScheduledInfo = useMemo(
     () => getNextScheduledBackupInfo(backupSchedule, clockTick),
@@ -120,9 +146,21 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       scheduleDraft.runMissedOnReopen !== backupSchedule.runMissedOnReopen ||
       scheduleDraft.maxRetention !== backupSchedule.maxRetention ||
       scheduleDraft.times.join(',') !== backupSchedule.times.join(',') ||
-      scheduleDraft.daysOfWeek.join(',') !== backupSchedule.daysOfWeek.join(',')
+      scheduleDraft.daysOfWeek.join(',') !== backupSchedule.daysOfWeek.join(',') ||
+      draftReminder.enabled !== savedReminder.enabled ||
+      draftReminder.style !== savedReminder.style ||
+      draftReminder.thresholdHours !== savedReminder.thresholdHours
     );
-  }, [scheduleDraft, backupSchedule]);
+  }, [
+    scheduleDraft,
+    backupSchedule,
+    draftReminder.enabled,
+    draftReminder.style,
+    draftReminder.thresholdHours,
+    savedReminder.enabled,
+    savedReminder.style,
+    savedReminder.thresholdHours,
+  ]);
 
   useEffect(() => {
     if (externalDateFilter) {
@@ -225,10 +263,19 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
 
   const handleSaveSchedule = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanedReminder: BackupReminderConfig = {
+      enabled: Boolean(draftReminder.enabled),
+      thresholdHours: Math.max(
+        1,
+        Math.min(168, Math.round(Number(draftReminder.thresholdHours) || 24))
+      ),
+      style: draftReminder.style === 'modal' ? 'modal' : 'toast',
+    };
     const cleanedConfig: BackupScheduleConfig = {
       ...scheduleDraft,
       times: sortAndDedupeScheduleTimes(scheduleDraft.times),
       daysOfWeek: Array.from(new Set(scheduleDraft.daysOfWeek)).sort((a, b) => a - b),
+      reminder: cleanedReminder,
       updatedAt: new Date().toISOString(),
       updatedBy: actorLabel,
     };
@@ -239,6 +286,9 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
     }
     setScheduleError(null);
     onSaveBackupSchedule?.(cleanedConfig);
+    const reminderAuditSummary = cleanedReminder.enabled
+      ? `Ativo (${cleanedReminder.style === 'modal' ? 'Modal' : 'Toast'} · > ${cleanedReminder.thresholdHours}h)`
+      : 'Desativado';
     onRecordSecurityEvent({
       category: 'site_backup',
       outcome: 'allowed',
@@ -247,23 +297,23 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
       actorRole: currentAdminUser?.role,
       rawTarget: cleanedConfig.enabled
         ? `Horários: ${cleanedConfig.times.join(', ')}`
-        : 'Agendamento pausado',
+        : `Lembrete: ${reminderAuditSummary}`,
       summary: cleanedConfig.enabled
         ? `Agendamento automático de backups salvo (${cleanedConfig.times.join(', ')})`
-        : 'Agendamento automático de backups pausado',
+        : 'Configurações de backup e lembrete atualizadas',
       detail: `Proteção ao fechar navegador: ${
         cleanedConfig.autoBackupOnExit ? 'Ativa' : 'Desativada'
       } · Recuperar ao reabrir: ${
         cleanedConfig.runMissedOnReopen ? 'Sim' : 'Não'
-      } · Retenção: até ${cleanedConfig.maxRetention} backups.`,
+      } · Lembrete de backup: ${reminderAuditSummary} · Retenção: até ${cleanedConfig.maxRetention} backups.`,
     });
     setFeedback({
       tone: 'success',
       message: cleanedConfig.enabled
-        ? `Agendamento salvo! Backups automáticos programados para ${cleanedConfig.times.join(
+        ? `Agendamento salvo! Backups automáticos para ${cleanedConfig.times.join(
             ', '
-          )} com verificação de integridade.`
-        : 'Configurações de agendamento salvas (execução programada pausada).',
+          )} · Lembrete: ${reminderAuditSummary}.`
+        : `Configurações salvas! Agendamento pausado · Lembrete de backup: ${reminderAuditSummary}.`,
     });
   };
 
@@ -887,6 +937,180 @@ export const AdminBackupVault: React.FC<AdminBackupVaultProps> = ({
               </span>
             </span>
           </label>
+        </div>
+
+        {/* Backup Overdue Reminder (> 24h) — Active even when Automatic Scheduler is OFF */}
+        <div
+          id="admin-backup-reminder-settings"
+          className="rounded-xl bg-white border border-zinc-200 p-3.5 sm:p-4 space-y-3"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
+            <div className="flex items-start gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309] flex items-center justify-center shrink-0 mt-0.5">
+                <BellRing className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-extrabold text-zinc-900">
+                  Lembrete de Backup (alerta acima do prazo)
+                </h4>
+                <p className="text-[11px] text-zinc-500 leading-relaxed mt-0.5">
+                  Exibe um aviso automático no painel caso o último backup ultrapasse o limite escolhido — funciona mesmo com o agendador automático desativado.
+                </p>
+              </div>
+            </div>
+
+            <span
+              className={`self-start px-2.5 py-1 rounded-lg border text-[11px] font-bold shrink-0 ${
+                !savedReminder.enabled
+                  ? 'bg-zinc-100 border-zinc-200 text-zinc-500'
+                  : savedReminderEval.reason === 'never_backed_up' ||
+                      savedReminderEval.reason === 'overdue' ||
+                      (savedReminderEval.hoursSinceLastBackup !== null &&
+                        savedReminderEval.hoursSinceLastBackup >=
+                          savedReminderEval.thresholdHours)
+                    ? 'bg-amber-50 border-amber-300 text-amber-900'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              }`}
+            >
+              {!savedReminder.enabled
+                ? 'Lembrete desativado'
+                : savedReminderEval.reason === 'never_backed_up'
+                  ? 'Sem backup salvo'
+                  : savedReminderEval.reason === 'overdue' ||
+                      (savedReminderEval.hoursSinceLastBackup !== null &&
+                        savedReminderEval.hoursSinceLastBackup >=
+                          savedReminderEval.thresholdHours)
+                    ? `Atrasado · ${savedReminderEval.humanElapsedLabel}`
+                    : `Em dia · ${savedReminderEval.humanElapsedLabel}`}
+            </span>
+          </div>
+
+          <label
+            htmlFor="backup-reminder-enabled"
+            className="flex items-center gap-2.5 p-2.5 rounded-lg bg-[#FAFAFA] border border-zinc-200 hover:border-zinc-300 cursor-pointer"
+          >
+            <input
+              id="backup-reminder-enabled"
+              type="checkbox"
+              checked={draftReminder.enabled}
+              onChange={(e) =>
+                setScheduleDraft((prev) => ({
+                  ...prev,
+                  reminder: {
+                    ...DEFAULT_BACKUP_REMINDER_CONFIG,
+                    ...(prev.reminder || {}),
+                    enabled: e.target.checked,
+                  },
+                }))
+              }
+              className="rounded border-zinc-300 accent-zinc-950"
+            />
+            <span className="text-xs font-bold text-zinc-800">
+              Ativar lembrete de backup quando o último snapshot ultrapassar o prazo
+            </span>
+          </label>
+
+          <div
+            className={`grid grid-cols-1 lg:grid-cols-12 gap-3 items-end ${
+              draftReminder.enabled ? '' : 'opacity-60'
+            }`}
+          >
+            <div className="lg:col-span-5 space-y-1.5">
+              <span className="block text-[11px] font-bold text-zinc-700">
+                Formato da notificação
+              </span>
+              <div
+                role="radiogroup"
+                aria-label="Formato do lembrete de backup"
+                className="grid grid-cols-2 gap-1.5"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draftReminder.style === 'toast'}
+                  onClick={() =>
+                    setScheduleDraft((prev) => ({
+                      ...prev,
+                      reminder: {
+                        ...DEFAULT_BACKUP_REMINDER_CONFIG,
+                        ...(prev.reminder || {}),
+                        style: 'toast',
+                      },
+                    }))
+                  }
+                  className={`px-3 py-2 rounded-lg border text-xs font-bold cursor-pointer transition-colors ${
+                    draftReminder.style === 'toast'
+                      ? 'bg-zinc-950 text-[#FFBE00] border-zinc-950'
+                      : 'bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-700 border-zinc-200'
+                  }`}
+                >
+                  Notificação Toast
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draftReminder.style === 'modal'}
+                  onClick={() =>
+                    setScheduleDraft((prev) => ({
+                      ...prev,
+                      reminder: {
+                        ...DEFAULT_BACKUP_REMINDER_CONFIG,
+                        ...(prev.reminder || {}),
+                        style: 'modal',
+                      },
+                    }))
+                  }
+                  className={`px-3 py-2 rounded-lg border text-xs font-bold cursor-pointer transition-colors ${
+                    draftReminder.style === 'modal'
+                      ? 'bg-zinc-950 text-[#FFBE00] border-zinc-950'
+                      : 'bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-700 border-zinc-200'
+                  }`}
+                >
+                  Modal de Alerta
+                </button>
+              </div>
+            </div>
+
+            <div className="lg:col-span-4 space-y-1.5">
+              <label
+                htmlFor="backup-reminder-threshold"
+                className="block text-[11px] font-bold text-zinc-700"
+              >
+                Alertar se o último backup tiver mais de:
+              </label>
+              <select
+                id="backup-reminder-threshold"
+                value={draftReminder.thresholdHours}
+                onChange={(e) =>
+                  setScheduleDraft((prev) => ({
+                    ...prev,
+                    reminder: {
+                      ...DEFAULT_BACKUP_REMINDER_CONFIG,
+                      ...(prev.reminder || {}),
+                      thresholdHours: Number(e.target.value) || 24,
+                    },
+                  }))
+                }
+                className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-lg text-xs font-mono font-bold text-zinc-900 cursor-pointer"
+              >
+                <option value={12}>12 horas</option>
+                <option value={24}>24 horas (padrão)</option>
+                <option value={48}>48 horas (2 dias)</option>
+                <option value={72}>72 horas (3 dias)</option>
+              </select>
+            </div>
+
+            <div className="lg:col-span-3">
+              <button
+                type="button"
+                onClick={() => onPreviewBackupReminder?.(draftReminder.style)}
+                className="w-full px-3 py-2 rounded-lg bg-[#FFFBEB] hover:bg-[#FEF3C7] border border-[#F59E0B]/40 text-amber-950 text-xs font-extrabold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <BellRing className="w-3.5 h-3.5 text-[#B45309]" />
+                <span>Pré-visualizar</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {scheduleError && (

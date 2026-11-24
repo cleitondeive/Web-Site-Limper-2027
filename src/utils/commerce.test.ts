@@ -4,6 +4,7 @@ import {
   ADMIN_PRODUCTS_PAGE_SIZE,
   ALL_ADMIN_TABS,
   DEFAULT_ADMIN_USERS,
+  DEFAULT_BACKUP_REMINDER_CONFIG,
   DEFAULT_BACKUP_SCHEDULE_CONFIG,
   DEFAULT_HIGHLIGHT_BADGE_COLOR,
   DEFAULT_PROMO_BADGE_COLOR,
@@ -32,6 +33,7 @@ import {
   duplicateMultipleProducts,
   duplicateProductItem,
   emptyProductTrash,
+  evaluateBackupReminderStatus,
   evaluateCoupon,
   evaluateDueScheduledBackup,
   evaluateLogisticsEligibility,
@@ -46,6 +48,7 @@ import {
   formatBackupByteSize,
   formatBrDateFromYmd,
   formatCurrency,
+  formatHoursElapsedPtBr,
   formatLogisticsModeLabel,
   formatPageNumberLabel,
   formatPhone,
@@ -2324,6 +2327,124 @@ test('Scheduled backup engine normalizes times, validates config, evaluates exac
   assert.equal(nextThu?.nextDateKey, '2026-11-26');
   assert.equal(nextThu?.nextTime, '09:00');
 });
+
+test('47. Backup reminder evaluates >24h overdue threshold, Toast/Modal style, snooze, and human labels', () => {
+  const nowMs = new Date(2026, 10, 24, 15, 0, 0, 0).getTime();
+  const basePayload = {
+    categories: INITIAL_CATEGORIES.slice(0, 1),
+    products: INITIAL_PRODUCTS.slice(0, 2),
+    deletedProducts: [],
+    kits: INITIAL_KITS.slice(0, 1),
+    coupons: INITIAL_COUPONS.slice(0, 1),
+    banners: INITIAL_BANNERS.slice(0, 1),
+    orders: [],
+    settings: INITIAL_STORE_SETTINGS,
+    adminUsers: DEFAULT_ADMIN_USERS,
+    securityLogs: [],
+  };
+
+  // Human elapsed formatter
+  assert.equal(formatHoursElapsedPtBr(0.4), 'há 24 min');
+  assert.equal(formatHoursElapsedPtBr(5), 'há 5 horas');
+  assert.equal(formatHoursElapsedPtBr(24), 'há 1 dia');
+  assert.equal(formatHoursElapsedPtBr(28), 'há 1 dia e 4 horas');
+  assert.equal(formatHoursElapsedPtBr(50), 'há 2 dias e 2 horas');
+
+  // Disabled reminder never notifies
+  const disabledEval = evaluateBackupReminderStatus(
+    { ...DEFAULT_BACKUP_REMINDER_CONFIG, enabled: false },
+    [],
+    nowMs
+  );
+  assert.equal(disabledEval.shouldNotify, false);
+  assert.equal(disabledEval.reason, 'disabled');
+
+  // Empty backups triggers never_backed_up
+  const neverEval = evaluateBackupReminderStatus(
+    { enabled: true, thresholdHours: 24, style: 'toast' },
+    [],
+    nowMs
+  );
+  assert.equal(neverEval.shouldNotify, true);
+  assert.equal(neverEval.reason, 'never_backed_up');
+  assert.equal(neverEval.style, 'toast');
+  assert.equal(neverEval.lastBackupAt, null);
+
+  // Recent backup (6h ago) is up-to-date
+  const recentSnap = {
+    ...createSiteBackupSnapshot({
+      payload: basePayload,
+      trigger: 'manual',
+      createdBy: 'Administrador Master (@admin)',
+    }),
+    createdAt: new Date(nowMs - 6 * 3_600_000).toISOString(),
+  };
+  const recentEval = evaluateBackupReminderStatus(
+    { enabled: true, thresholdHours: 24, style: 'modal' },
+    [recentSnap],
+    nowMs
+  );
+  assert.equal(recentEval.shouldNotify, false);
+  assert.equal(recentEval.reason, 'recent_backup');
+  assert.equal(recentEval.style, 'modal');
+  assert.equal(recentEval.hoursSinceLastBackup, 6);
+
+  // Overdue backup (28h ago) notifies even when scheduler is OFF
+  const oldSnap = {
+    ...createSiteBackupSnapshot({
+      payload: basePayload,
+      trigger: 'manual',
+      createdBy: 'Administrador Master (@admin)',
+    }),
+    createdAt: new Date(nowMs - 28 * 3_600_000).toISOString(),
+  };
+  const overdueEval = evaluateBackupReminderStatus(
+    { enabled: true, thresholdHours: 24, style: 'modal' },
+    [oldSnap],
+    nowMs
+  );
+  assert.equal(overdueEval.shouldNotify, true);
+  assert.equal(overdueEval.reason, 'overdue');
+  assert.equal(overdueEval.humanElapsedLabel, 'há 1 dia e 4 horas');
+
+  // Active snooze suppresses notification until snoozedUntil expires
+  const snoozedEval = evaluateBackupReminderStatus(
+    {
+      enabled: true,
+      thresholdHours: 24,
+      style: 'toast',
+      snoozedUntil: new Date(nowMs + 2 * 3_600_000).toISOString(),
+    },
+    [oldSnap],
+    nowMs
+  );
+  assert.equal(snoozedEval.shouldNotify, false);
+  assert.equal(snoozedEval.reason, 'snoozed');
+
+  // Expired snooze notifies again
+  const expiredSnoozeEval = evaluateBackupReminderStatus(
+    {
+      enabled: true,
+      thresholdHours: 24,
+      style: 'toast',
+      snoozedUntil: new Date(nowMs - 60_000).toISOString(),
+    },
+    [oldSnap],
+    nowMs
+  );
+  assert.equal(expiredSnoozeEval.shouldNotify, true);
+  assert.equal(expiredSnoozeEval.reason, 'overdue');
+
+  // Custom 48h threshold treats 28h snapshot as recent_backup
+  const custom48Eval = evaluateBackupReminderStatus(
+    { enabled: true, thresholdHours: 48, style: 'toast' },
+    [oldSnap],
+    nowMs
+  );
+  assert.equal(custom48Eval.shouldNotify, false);
+  assert.equal(custom48Eval.reason, 'recent_backup');
+});
+
 
 
 

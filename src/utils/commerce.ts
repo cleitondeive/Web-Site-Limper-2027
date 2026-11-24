@@ -2,6 +2,8 @@ import {
   AdminAppTab,
   AdminRoleLevel,
   AdminUser,
+  BackupReminderConfig,
+  BackupReminderEvaluation,
   BackupScheduleConfig,
   CartItem,
   CatalogSortOption,
@@ -3971,6 +3973,12 @@ export const WEEKDAY_SHORT_LABELS: { day: number; label: string; fullName: strin
   { day: 6, label: 'Sáb', fullName: 'Sábado' },
 ];
 
+export const DEFAULT_BACKUP_REMINDER_CONFIG: BackupReminderConfig = {
+  enabled: true,
+  thresholdHours: 24,
+  style: 'toast',
+};
+
 export const DEFAULT_BACKUP_SCHEDULE_CONFIG: BackupScheduleConfig = {
   enabled: false,
   times: ['09:00', '18:00'],
@@ -3978,6 +3986,7 @@ export const DEFAULT_BACKUP_SCHEDULE_CONFIG: BackupScheduleConfig = {
   maxRetention: MAX_STORED_SITE_BACKUPS,
   autoBackupOnExit: true,
   runMissedOnReopen: true,
+  reminder: DEFAULT_BACKUP_REMINDER_CONFIG,
 };
 
 export function normalizeScheduleTime(raw: string): string | null {
@@ -4192,6 +4201,122 @@ export function getNextScheduledBackupInfo(
 
   return null;
 }
+
+export function formatHoursElapsedPtBr(hours: number): string {
+  const safeHours = Math.max(0, Number.isFinite(hours) ? hours : 0);
+  const wholeHours = Math.floor(safeHours);
+  if (wholeHours < 1) {
+    const mins = Math.max(1, Math.round(safeHours * 60));
+    return `há ${mins} min`;
+  }
+  if (wholeHours < 24) {
+    return wholeHours === 1 ? 'há 1 hora' : `há ${wholeHours} horas`;
+  }
+  const days = Math.floor(wholeHours / 24);
+  const remHours = wholeHours % 24;
+  const dayLabel = days === 1 ? '1 dia' : `${days} dias`;
+  if (remHours === 0) {
+    return `há ${dayLabel}`;
+  }
+  const hourLabel = remHours === 1 ? '1 hora' : `${remHours} horas`;
+  return `há ${dayLabel} e ${hourLabel}`;
+}
+
+export function evaluateBackupReminderStatus(
+  reminder: BackupReminderConfig | undefined,
+  backups: Pick<SiteBackupSnapshot, 'createdAt'>[],
+  nowMs: number = Date.now()
+): BackupReminderEvaluation {
+  const cfg: BackupReminderConfig = {
+    ...DEFAULT_BACKUP_REMINDER_CONFIG,
+    ...(reminder || {}),
+  };
+  const thresholdHours =
+    Number.isFinite(cfg.thresholdHours) && cfg.thresholdHours >= 1 && cfg.thresholdHours <= 168
+      ? Math.round(cfg.thresholdHours)
+      : 24;
+  const style = cfg.style === 'modal' ? 'modal' : 'toast';
+
+  // Find latest valid backup timestamp
+  let latestMs: number | null = null;
+  let latestIso: string | null = null;
+  for (const b of backups || []) {
+    const t = new Date(b.createdAt).getTime();
+    if (!Number.isNaN(t) && (latestMs === null || t > latestMs)) {
+      latestMs = t;
+      latestIso = b.createdAt;
+    }
+  }
+
+  const hoursSinceLastBackup =
+    latestMs !== null ? Math.max(0, (nowMs - latestMs) / 3_600_000) : null;
+  const humanElapsedLabel =
+    hoursSinceLastBackup !== null
+      ? formatHoursElapsedPtBr(hoursSinceLastBackup)
+      : 'Nenhum backup realizado ainda';
+
+  if (!cfg.enabled) {
+    return {
+      shouldNotify: false,
+      reason: 'disabled',
+      style,
+      thresholdHours,
+      lastBackupAt: latestIso,
+      hoursSinceLastBackup,
+      humanElapsedLabel,
+    };
+  }
+
+  if (cfg.snoozedUntil) {
+    const snoozeMs = new Date(cfg.snoozedUntil).getTime();
+    if (!Number.isNaN(snoozeMs) && snoozeMs > nowMs) {
+      return {
+        shouldNotify: false,
+        reason: 'snoozed',
+        style,
+        thresholdHours,
+        lastBackupAt: latestIso,
+        hoursSinceLastBackup,
+        humanElapsedLabel,
+      };
+    }
+  }
+
+  if (hoursSinceLastBackup === null) {
+    return {
+      shouldNotify: true,
+      reason: 'never_backed_up',
+      style,
+      thresholdHours,
+      lastBackupAt: null,
+      hoursSinceLastBackup: null,
+      humanElapsedLabel,
+    };
+  }
+
+  if (hoursSinceLastBackup >= thresholdHours) {
+    return {
+      shouldNotify: true,
+      reason: 'overdue',
+      style,
+      thresholdHours,
+      lastBackupAt: latestIso,
+      hoursSinceLastBackup,
+      humanElapsedLabel,
+    };
+  }
+
+  return {
+    shouldNotify: false,
+    reason: 'recent_backup',
+    style,
+    thresholdHours,
+    lastBackupAt: latestIso,
+    hoursSinceLastBackup,
+    humanElapsedLabel,
+  };
+}
+
 
 
 

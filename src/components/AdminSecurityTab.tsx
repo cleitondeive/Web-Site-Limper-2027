@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   AdminUser,
+  BackupReminderStyle,
   BackupScheduleConfig,
   CreateSecurityAuditEventInput,
   CustomerProfile,
@@ -58,6 +59,7 @@ interface AdminSecurityTabProps {
   currentSitePayload?: SiteBackupPayload;
   onSaveSiteBackups?: (backups: SiteBackupSnapshot[]) => void;
   onSaveBackupSchedule?: (schedule: BackupScheduleConfig) => void;
+  onPreviewBackupReminder?: (style: BackupReminderStyle) => void;
   onRestoreSiteBackup?: (snapshot: SiteBackupSnapshot) => void;
   onAutoRepairCatalog?: () => string[];
   isolationContext: {
@@ -81,6 +83,7 @@ export const AdminSecurityTab: React.FC<AdminSecurityTabProps> = ({
   currentSitePayload,
   onSaveSiteBackups,
   onSaveBackupSchedule,
+  onPreviewBackupReminder,
   onRestoreSiteBackup,
   onAutoRepairCatalog,
   isolationContext,
@@ -1168,6 +1171,7 @@ export const AdminSecurityTab: React.FC<AdminSecurityTabProps> = ({
           onClearExternalDateFilter={() => setBackupJumpDate('')}
           onSaveBackups={onSaveSiteBackups}
           onSaveBackupSchedule={onSaveBackupSchedule}
+          onPreviewBackupReminder={onPreviewBackupReminder}
           onRestoreBackup={onRestoreSiteBackup}
           onRecordSecurityEvent={onRecordSecurityEvent}
         />

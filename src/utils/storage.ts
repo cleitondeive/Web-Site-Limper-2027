@@ -16,6 +16,7 @@ import {
 } from '../types/commerce';
 import {
   DEFAULT_ADMIN_USERS,
+  DEFAULT_BACKUP_REMINDER_CONFIG,
   DEFAULT_BACKUP_SCHEDULE_CONFIG,
   sortAndDedupeScheduleTimes,
 } from './commerce';
@@ -390,6 +391,22 @@ export const storageService = {
         merged.maxRetention <= 30
           ? Math.round(merged.maxRetention)
           : DEFAULT_BACKUP_SCHEDULE_CONFIG.maxRetention,
+      reminder: {
+        ...DEFAULT_BACKUP_REMINDER_CONFIG,
+        ...(merged.reminder && typeof merged.reminder === 'object'
+          ? merged.reminder
+          : {}),
+        style:
+          merged.reminder?.style === 'modal' || merged.reminder?.style === 'toast'
+            ? merged.reminder.style
+            : DEFAULT_BACKUP_REMINDER_CONFIG.style,
+        thresholdHours:
+          Number.isFinite(merged.reminder?.thresholdHours) &&
+          (merged.reminder?.thresholdHours ?? 0) >= 1 &&
+          (merged.reminder?.thresholdHours ?? 0) <= 168
+            ? Math.round(merged.reminder!.thresholdHours)
+            : DEFAULT_BACKUP_REMINDER_CONFIG.thresholdHours,
+      },
     };
   },
   saveBackupSchedule: (config: BackupScheduleConfig) =>
