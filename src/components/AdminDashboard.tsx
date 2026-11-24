@@ -70,6 +70,7 @@ import {
   CategoryIconName,
   CreateSecurityAuditEventInput,
   CustomerProfile,
+  DeletedProductEntry,
   DeliveryType,
   Order,
   OrderDatePreset,
@@ -97,6 +98,7 @@ import {
   canAdminUserAccessTab,
   duplicateMultipleProducts,
   duplicateProductItem,
+  emptyProductTrash,
   filterOrdersByCriteria,
   formatAdminActorLabel,
   formatAdminDashboardDateTime,
@@ -119,11 +121,14 @@ import {
   isOrderQuoteOnly,
   isProductPriceVisible,
   moveProductStep,
+  moveProductsToTrash,
   normalizeHexColor,
   normalizePhone,
   paginateItems,
+  permanentlyDeleteFromTrash,
   reorderProductsById,
   resolveProductBadgeStyle,
+  restoreProductFromTrash,
   summarizeOrdersPeriod,
   toDateKeyYmd,
   transitionOrderStatus,
@@ -150,7 +155,11 @@ import { AdminCommandPalette } from './AdminCommandPalette';
 import { AdminSecurityTab } from './AdminSecurityTab';
 import { AdminUserAvatar, AdminUsersTab } from './AdminUsersTab';
 import { BadgeColorPicker } from './BadgeColorPicker';
-import { DEFAULT_CUSTOMER_PROFILE } from '../utils/storage';
+import {
+  ProductDeleteConfirmModal,
+  ProductTrashPanel,
+} from './ProductTrashPanel';
+import { DEFAULT_CUSTOMER_PROFILE, storageService } from '../utils/storage';
 
 interface AdminDashboardProps {
   categories: Category[];
@@ -325,11 +334,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [draggedProductId, setDraggedProductId] = useState<string | null>(null);
   const [dragOverProductId, setDragOverProductId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<'before' | 'after'>('before');
-  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  const [productSubView, setProductSubView] = useState<'active' | 'trash'>('active');
+  const [deletedProducts, setDeletedProducts] = useState<DeletedProductEntry[]>(() =>
+    storageService.getDeletedProducts()
+  );
+  const [pendingDeleteProductIds, setPendingDeleteProductIds] = useState<string[]>([]);
   const [productActionFeedback, setProductActionFeedback] = useState<{
     message: string;
     productIdToEdit?: string;
     undoProducts?: Product[];
+    showTrashShortcut?: boolean;
   } | null>(null);
 
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
@@ -340,9 +354,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [posCustomerPhone, setPosCustomerPhone] = useState('');
   const [posDeliveryType, setPosDeliveryType] = useState<DeliveryType>('pickup');
   const [posPaymentMethod, setPosPaymentMethod] = useState<PaymentMethod>('pix');
-  const [posQuantities, setPosQuantities] = useState<Record<string, number>>({
-    'prod-pes-1': 1,
-    'prod-casa-3': 1,
+  const [posProductSearch, setPosProductSearch] = useState('');
+  const [posFormError, setPosFormError] = useState<string | null>(null);
+  const [posQuantities, setPosQuantities] = useState<Record<string, number>>(() => {
+    const initial: Record<string, number> = {};
+    products
+      .filter((p) => p.status === 'active')
+      .slice(0, 2)
+      .forEach((p) => {
+        initial[p.id] = 1;
+      });
+    return initial;
   });
 
   // Product Form State
@@ -488,18 +510,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [isAuthenticated, currentAdminUser, activeTab]);
 
-  // Global Keyboard Shortcut: Ctrl+K / Cmd+K opens Admin Command Palette
+  // Global Keyboard Shortcuts: Ctrl+K / Cmd+K opens Admin Command Palette; Escape closes Print Comanda
   useEffect(() => {
     if (!isAuthenticated) return;
     const onGlobalKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsCommandPaletteOpen((prev) => !prev);
+      } else if (e.key === 'Escape' && printOrder) {
+        e.preventDefault();
+        setPrintOrder(null);
       }
     };
     window.addEventListener('keydown', onGlobalKeyDown);
     return () => window.removeEventListener('keydown', onGlobalKeyDown);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, printOrder]);
 
   const recordAdminAction = (
     input: Omit<
@@ -664,6 +689,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleCreatePosOrder = (e: React.FormEvent) => {
     e.preventDefault();
+    setPosFormError(null);
     const selectedItems = products
       .filter((p) => (posQuantities[p.id] || 0) > 0)
       .map((p) => {
@@ -680,7 +706,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         };
       });
 
-    if (selectedItems.length === 0) return;
+    if (selectedItems.length === 0) {
+      setPosFormError(
+        'Selecione pelo menos 1 produto com quantidade maior que zero para gerar o pedido.'
+      );
+      return;
+    }
 
     const subtotal = selectedItems.reduce((acc, i) => acc + i.subtotal, 0);
     const nextNum = generateNextOrderNumber(orders);
@@ -717,6 +748,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsManualPosOpen(false);
     setPosCustomerName('');
     setPosCustomerPhone('');
+    setPosProductSearch('');
+    setPosFormError(null);
     setPrintOrder(newPosOrder);
   };
 
@@ -1205,24 +1238,191 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setSelectedProductIds([]);
   };
 
-  const handleDeleteProduct = (productId: string) => {
-    const target = products.find((p) => p.id === productId);
-    const snapshot = products;
-    setSelectedProductIds((prev) => prev.filter((id) => id !== productId));
-    onSaveProducts(products.filter((p) => p.id !== productId));
-    if (target) {
+  const persistDeletedProducts = (next: DeletedProductEntry[]) => {
+    setDeletedProducts(next);
+    storageService.saveDeletedProducts(next);
+  };
+
+  const requestDeleteProducts = (ids: string[]) => {
+    const validIds = ids.filter((id) => products.some((p) => p.id === id));
+    if (validIds.length === 0) return;
+    setPendingDeleteProductIds(validIds);
+  };
+
+  const handleConfirmDeleteProducts = () => {
+    if (pendingDeleteProductIds.length === 0) return;
+    const actorLabel = currentAdminUser
+      ? formatAdminActorLabel(currentAdminUser)
+      : 'Administrador';
+    const { nextProducts, nextTrash, movedEntries } = moveProductsToTrash(
+      products,
+      deletedProducts,
+      pendingDeleteProductIds,
+      actorLabel
+    );
+    if (movedEntries.length === 0) {
+      setPendingDeleteProductIds([]);
+      return;
+    }
+
+    const movedIdSet = new Set(movedEntries.map((entry) => entry.product.id));
+    if (editingProduct && movedIdSet.has(editingProduct.id)) {
+      setIsProductFormOpen(false);
+      setEditingProduct(null);
+    }
+
+    onSaveProducts(nextProducts);
+    persistDeletedProducts(nextTrash);
+    setSelectedProductIds((prev) => prev.filter((id) => !movedIdSet.has(id)));
+    setPendingDeleteProductIds([]);
+
+    if (movedEntries.length === 1) {
+      const target = movedEntries[0].product;
       recordAdminAction({
         category: 'catalog_policy',
         outcome: 'info',
         rawTarget: target.sku,
-        summary: `Produto removido: ${target.title}`,
-        detail: `Item SKU ${target.sku} excluído do catálogo administrativo.`,
+        summary: `Produto movido para excluídos: ${target.title}`,
+        detail: `Item SKU ${target.sku} enviado para a área de Produtos Excluídos (pode ser resgatado ou apagado definitivamente).`,
       });
       setProductActionFeedback({
-        message: `Produto "${target.title}" removido do catálogo.`,
-        undoProducts: snapshot,
+        message: `Produto "${target.title}" movido para Produtos Excluídos. Você pode resgatá-lo quando quiser.`,
+        showTrashShortcut: true,
+      });
+    } else {
+      recordAdminAction({
+        category: 'catalog_policy',
+        outcome: 'info',
+        rawTarget: `${movedEntries.length} produtos`,
+        summary: `${movedEntries.length} produtos movidos para excluídos`,
+        detail: `Itens enviados em lote para a área de Produtos Excluídos: ${movedEntries
+          .slice(0, 5)
+          .map((e) => e.product.sku)
+          .join(', ')}.`,
+      });
+      setProductActionFeedback({
+        message: `${movedEntries.length} produto(s) movido(s) para Produtos Excluídos.`,
+        showTrashShortcut: true,
       });
     }
+  };
+
+  const handleRestoreDeletedProduct = (productId: string) => {
+    const kitSkus = kits.map((k) => k.sku || '').filter(Boolean);
+    const result = restoreProductFromTrash(
+      products,
+      deletedProducts,
+      productId,
+      categories,
+      kitSkus
+    );
+    if (!result.restoredProduct) return;
+
+    onSaveProducts(result.nextProducts);
+    persistDeletedProducts(result.nextTrash);
+
+    const adjustments: string[] = [];
+    if (result.skuReassigned) {
+      adjustments.push(`SKU atualizado para ${result.restoredProduct.sku}`);
+    }
+    if (result.categoryReassigned) {
+      adjustments.push('categoria ajustada automaticamente');
+    }
+
+    recordAdminAction({
+      category: 'catalog_policy',
+      outcome: 'allowed',
+      rawTarget: result.restoredProduct.sku,
+      summary: `Produto resgatado da lixeira: ${result.restoredProduct.title}`,
+      detail: `Item SKU ${result.restoredProduct.sku} restaurado para o catálogo ativo.${
+        adjustments.length > 0 ? ` (${adjustments.join('; ')})` : ''
+      }`,
+    });
+
+    setProductActionFeedback({
+      message: `Produto "${result.restoredProduct.title}" resgatado com sucesso para o Catálogo Ativo${
+        adjustments.length > 0 ? ` (${adjustments.join(', ')})` : ''
+      }.`,
+    });
+  };
+
+  const handleRestoreAllDeletedProducts = () => {
+    if (deletedProducts.length === 0) return;
+    const kitSkus = kits.map((k) => k.sku || '').filter(Boolean);
+    let workingProducts = products;
+    let workingTrash = deletedProducts;
+    let restoredCount = 0;
+
+    // Restore oldest first so original positions align naturally
+    const idsToRestore = [...deletedProducts].reverse().map((entry) => entry.product.id);
+    for (const id of idsToRestore) {
+      const res = restoreProductFromTrash(
+        workingProducts,
+        workingTrash,
+        id,
+        categories,
+        kitSkus
+      );
+      if (res.restoredProduct) {
+        workingProducts = res.nextProducts;
+        workingTrash = res.nextTrash;
+        restoredCount += 1;
+      }
+    }
+
+    if (restoredCount === 0) return;
+    onSaveProducts(workingProducts);
+    persistDeletedProducts(workingTrash);
+    setProductSubView('active');
+
+    recordAdminAction({
+      category: 'catalog_policy',
+      outcome: 'allowed',
+      rawTarget: `${restoredCount} produtos`,
+      summary: `${restoredCount} produto(s) resgatado(s) da área de excluídos`,
+      detail: `Todos os ${restoredCount} itens da área de Produtos Excluídos foram devolvidos ao catálogo ativo.`,
+    });
+
+    setProductActionFeedback({
+      message: `${restoredCount} produto(s) resgatado(s) de volta para o Catálogo Ativo.`,
+    });
+  };
+
+  const handlePermanentDeleteProduct = (productId: string) => {
+    const { nextTrash, removedEntry } = permanentlyDeleteFromTrash(
+      deletedProducts,
+      productId
+    );
+    if (!removedEntry) return;
+
+    persistDeletedProducts(nextTrash);
+    recordAdminAction({
+      category: 'catalog_policy',
+      outcome: 'info',
+      rawTarget: removedEntry.product.sku,
+      summary: `Produto excluído definitivamente: ${removedEntry.product.title}`,
+      detail: `Item SKU ${removedEntry.product.sku} removido permanentemente da área de Produtos Excluídos.`,
+    });
+    setProductActionFeedback({
+      message: `Produto "${removedEntry.product.title}" excluído definitivamente.`,
+    });
+  };
+
+  const handleEmptyProductTrash = () => {
+    const { nextTrash, removedCount } = emptyProductTrash(deletedProducts);
+    if (removedCount === 0) return;
+
+    persistDeletedProducts(nextTrash);
+    recordAdminAction({
+      category: 'catalog_policy',
+      outcome: 'info',
+      rawTarget: `${removedCount} produtos`,
+      summary: `Área de produtos excluídos limpa (${removedCount} itens)`,
+      detail: `${removedCount} produto(s) removido(s) definitivamente para limpeza da área de exclusão.`,
+    });
+    setProductActionFeedback({
+      message: `Área de exclusão limpa: ${removedCount} produto(s) removido(s) definitivamente.`,
+    });
   };
 
   const handleDuplicateProduct = (product: Product) => {
@@ -1282,7 +1482,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (duplicatedProducts.length === 0) return;
     onSaveProducts(nextProducts);
     setSelectedProductIds([]);
-    setConfirmBatchDelete(false);
     setProductActionFeedback({
       message: `${duplicatedProducts.length} produto(s) duplicado(s) com novos códigos SKU.`,
       productIdToEdit:
@@ -1308,21 +1507,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       message: `${selectedProductIds.length} produto(s) atualizado(s) para "${statusLabel}".`,
     });
     setSelectedProductIds([]);
-    setConfirmBatchDelete(false);
-  };
-
-  const handleBatchDeleteSelected = () => {
-    if (selectedProductIds.length === 0) return;
-    const selectedSet = new Set(selectedProductIds);
-    const snapshot = products;
-    const removedCount = selectedSet.size;
-    onSaveProducts(products.filter((p) => !selectedSet.has(p.id)));
-    setSelectedProductIds([]);
-    setConfirmBatchDelete(false);
-    setProductActionFeedback({
-      message: `${removedCount} produto(s) removido(s) do catálogo.`,
-      undoProducts: snapshot,
-    });
   };
 
   const handleMoveProduct = (
@@ -1989,6 +2173,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     onSaveCategories(remaining);
+    if (editingCategory?.id === catId) {
+      setEditingCategory(null);
+      setCatName('');
+      setCatShortName('');
+      setCatDesc('');
+    }
     if (target) {
       recordAdminAction({
         category: 'catalog_policy',
@@ -3579,12 +3769,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <button
                         type="button"
-                        onClick={() => setIsManualPosOpen(false)}
+                        onClick={() => {
+                          setIsManualPosOpen(false);
+                          setPosFormError(null);
+                        }}
+                        aria-label="Fechar PDV"
                         className="text-zinc-400 hover:text-zinc-700 cursor-pointer"
                       >
                         <X className="w-5 h-5" />
                       </button>
                     </div>
+
+                    {posFormError && (
+                      <div
+                        role="alert"
+                        className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2"
+                      >
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{posFormError}</span>
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                       <div>
@@ -3640,72 +3844,133 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
 
-                    <div className="max-h-48 overflow-y-auto border border-zinc-200 rounded-xl divide-y divide-zinc-100 bg-[#FAFAFA] p-2">
-                      {products
-                        .filter((p) => p.status === 'active')
-                        .slice(0, 10)
-                        .map((p) => {
+                    {(() => {
+                      const activePosProducts = products.filter((p) => p.status === 'active');
+                      const q = posProductSearch.trim().toLowerCase();
+                      const filteredPosProducts = q
+                        ? activePosProducts.filter(
+                            (p) =>
+                              p.title.toLowerCase().includes(q) ||
+                              p.sku.toLowerCase().includes(q) ||
+                              p.volumeLabel.toLowerCase().includes(q)
+                          )
+                        : activePosProducts;
+                      const posSummary = activePosProducts.reduce(
+                        (acc, p) => {
                           const qty = posQuantities[p.id] || 0;
-                          return (
-                            <div
-                              key={`pos-${p.id}`}
-                              className="py-1.5 px-2 flex items-center justify-between gap-2 text-xs"
-                            >
-                              <div className="truncate">
-                                <strong className="text-zinc-900">{p.title}</strong>{' '}
-                                <span className="font-mono text-zinc-500">
-                                  ({p.volumeLabel} · {formatCurrency(getEffectivePrice(p))})
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setPosQuantities((prev) => ({
-                                      ...prev,
-                                      [p.id]: Math.max(0, (prev[p.id] || 0) - 1),
-                                    }))
-                                  }
-                                  className="w-6 h-6 rounded-md bg-white border border-zinc-300 font-bold cursor-pointer"
-                                >
-                                  -
-                                </button>
-                                <span className="font-mono font-extrabold w-5 text-center">
-                                  {qty}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setPosQuantities((prev) => ({
-                                      ...prev,
-                                      [p.id]: (prev[p.id] || 0) + 1,
-                                    }))
-                                  }
-                                  className="w-6 h-6 rounded-md bg-[#FFBE00] text-zinc-950 font-bold cursor-pointer"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                    </div>
+                          if (qty > 0) {
+                            acc.units += qty;
+                            acc.total += getEffectivePrice(p) * qty;
+                          }
+                          return acc;
+                        },
+                        { units: 0, total: 0 }
+                      );
 
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsManualPosOpen(false)}
-                        className="px-4 py-2 bg-zinc-100 text-zinc-700 font-bold text-xs rounded-xl cursor-pointer"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer"
-                      >
-                        Gerar Pedido & Abrir Comanda de Separação
-                      </button>
-                    </div>
+                      return (
+                        <>
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="relative flex-1 min-w-[200px]">
+                                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                <input
+                                  type="search"
+                                  value={posProductSearch}
+                                  onChange={(e) => setPosProductSearch(e.target.value)}
+                                  placeholder="Buscar qualquer produto do catálogo por nome ou SKU..."
+                                  className="w-full pl-8 pr-3 py-2 bg-[#FAFAFA] focus:bg-white border border-zinc-300 focus:border-[#FFBE00] focus:outline-none rounded-xl text-xs"
+                                />
+                              </div>
+                              <span className="px-2.5 py-1 rounded-lg bg-[#FFFBEB] border border-[#FFBE00] font-mono text-[11px] font-extrabold text-zinc-900">
+                                {posSummary.units} un. · {formatCurrency(posSummary.total)}
+                              </span>
+                            </div>
+
+                            <div className="max-h-52 overflow-y-auto border border-zinc-200 rounded-xl divide-y divide-zinc-100 bg-[#FAFAFA] p-2">
+                              {filteredPosProducts.length === 0 ? (
+                                <div className="py-4 text-center text-xs text-zinc-500">
+                                  Nenhum produto ativo encontrado para &ldquo;{posProductSearch}&rdquo;.
+                                </div>
+                              ) : (
+                                filteredPosProducts.map((p) => {
+                                  const qty = posQuantities[p.id] || 0;
+                                  return (
+                                    <div
+                                      key={`pos-${p.id}`}
+                                      className={`py-1.5 px-2 flex items-center justify-between gap-2 text-xs rounded-lg ${
+                                        qty > 0 ? 'bg-[#FFFBEB]' : ''
+                                      }`}
+                                    >
+                                      <div className="truncate">
+                                        <span className="font-mono text-[10px] text-zinc-400 mr-1.5">
+                                          {p.sku}
+                                        </span>
+                                        <strong className="text-zinc-900">{p.title}</strong>{' '}
+                                        <span className="font-mono text-zinc-500">
+                                          ({p.volumeLabel} · {formatCurrency(getEffectivePrice(p))})
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                          type="button"
+                                          aria-label={`Diminuir quantidade de ${p.title}`}
+                                          onClick={() => {
+                                            setPosFormError(null);
+                                            setPosQuantities((prev) => ({
+                                              ...prev,
+                                              [p.id]: Math.max(0, (prev[p.id] || 0) - 1),
+                                            }));
+                                          }}
+                                          className="w-6 h-6 rounded-md bg-white border border-zinc-300 font-bold cursor-pointer"
+                                        >
+                                          -
+                                        </button>
+                                        <span className="font-mono font-extrabold w-5 text-center">
+                                          {qty}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          aria-label={`Adicionar quantidade de ${p.title}`}
+                                          onClick={() => {
+                                            setPosFormError(null);
+                                            setPosQuantities((prev) => ({
+                                              ...prev,
+                                              [p.id]: (prev[p.id] || 0) + 1,
+                                            }));
+                                          }}
+                                          className="w-6 h-6 rounded-md bg-[#FFBE00] text-zinc-950 font-bold cursor-pointer"
+                                        >
+                                          +
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsManualPosOpen(false);
+                                setPosFormError(null);
+                              }}
+                              className="px-4 py-2 bg-zinc-100 text-zinc-700 font-bold text-xs rounded-xl cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="submit"
+                              className="px-5 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer"
+                            >
+                              Gerar Pedido & Abrir Comanda ({formatCurrency(posSummary.total)})
+                            </button>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </form>
                 )}
 
@@ -4323,7 +4588,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     type="button"
-                    onClick={openCreateProduct}
+                    onClick={() => {
+                      setProductSubView('active');
+                      openCreateProduct();
+                    }}
                     className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs sm:text-sm rounded-xl cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
@@ -4332,7 +4600,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {isProductFormOpen && (() => {
+              {/* Sub-view Switcher: Catálogo Ativo vs Produtos Excluídos */}
+              <div
+                role="tablist"
+                aria-label="Visualização do catálogo de produtos"
+                className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-2xl border border-zinc-200"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={productSubView === 'active'}
+                  onClick={() => setProductSubView('active')}
+                  className={`px-4 py-2 rounded-xl text-xs font-extrabold inline-flex items-center gap-2 transition-colors cursor-pointer ${
+                    productSubView === 'active'
+                      ? 'bg-zinc-950 text-[#FFBE00] shadow-2xs'
+                      : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+                  }`}
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  <span>Catálogo Ativo</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded font-mono text-[10px] tabular-nums ${
+                      productSubView === 'active'
+                        ? 'bg-zinc-800 text-[#FFBE00]'
+                        : 'bg-zinc-100 text-zinc-700'
+                    }`}
+                  >
+                    {products.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={productSubView === 'trash'}
+                  onClick={() => setProductSubView('trash')}
+                  className={`px-4 py-2 rounded-xl text-xs font-extrabold inline-flex items-center gap-2 transition-colors cursor-pointer ${
+                    productSubView === 'trash'
+                      ? 'bg-[#E3262E] text-white shadow-2xs'
+                      : deletedProducts.length > 0
+                      ? 'bg-rose-50 text-[#E3262E] hover:bg-rose-100 border border-rose-200'
+                      : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+                  }`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Produtos Excluídos</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded font-mono text-[10px] tabular-nums ${
+                      productSubView === 'trash'
+                        ? 'bg-rose-800 text-white'
+                        : deletedProducts.length > 0
+                        ? 'bg-[#E3262E] text-white'
+                        : 'bg-zinc-100 text-zinc-600'
+                    }`}
+                  >
+                    {deletedProducts.length}
+                  </span>
+                </button>
+              </div>
+
+              {productSubView === 'active' && isProductFormOpen && (() => {
                 const basePriceNum = Number(prodPrice.replace(',', '.')) || 0;
                 const promoNum = prodPromoPrice.trim()
                   ? Number(prodPromoPrice.replace(',', '.'))
@@ -5196,6 +5523,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         Editar Cópia Agora
                       </button>
                     )}
+                    {productActionFeedback.showTrashShortcut &&
+                      productSubView !== 'trash' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProductSubView('trash');
+                            setProductActionFeedback(null);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Ver Produtos Excluídos ({deletedProducts.length})</span>
+                        </button>
+                      )}
                     {productActionFeedback.undoProducts && (
                       <button
                         type="button"
@@ -5221,6 +5562,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
 
+              {productSubView === 'trash' ? (
+                <ProductTrashPanel
+                  deletedProducts={deletedProducts}
+                  categories={categories}
+                  onRestoreProduct={handleRestoreDeletedProduct}
+                  onRestoreAllProducts={handleRestoreAllDeletedProducts}
+                  onPermanentDeleteProduct={handlePermanentDeleteProduct}
+                  onEmptyTrash={handleEmptyProductTrash}
+                  onBackToCatalog={() => setProductSubView('active')}
+                />
+              ) : (
+                <>
               {/* Search, Category, Price Visibility, Status Filter & Batch Selection Toolbar */}
               <div className="bg-white p-4 rounded-2xl border border-zinc-200 space-y-3">
                 <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
@@ -5347,39 +5700,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       >
                         Em Falta
                       </button>
-                      {!confirmBatchDelete ? (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmBatchDelete(true)}
-                          className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-[#E3262E] font-bold text-xs inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Excluir</span>
-                        </button>
-                      ) : (
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={handleBatchDeleteSelected}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#E3262E] hover:bg-rose-700 text-white font-extrabold text-xs cursor-pointer"
-                          >
-                            Confirmar ({selectedProductIds.length})
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmBatchDelete(false)}
-                            className="px-2 py-1.5 rounded-lg bg-white border border-zinc-300 text-zinc-700 font-bold text-xs cursor-pointer"
-                          >
-                            Não
-                          </button>
-                        </div>
-                      )}
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedProductIds([]);
-                          setConfirmBatchDelete(false);
-                        }}
+                        onClick={() => requestDeleteProducts(selectedProductIds)}
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-[#E3262E] font-bold text-xs inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Excluir ({selectedProductIds.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProductIds([])}
                         className="px-2 py-1.5 rounded-lg text-zinc-600 hover:text-zinc-900 font-bold text-xs cursor-pointer"
                       >
                         Limpar
@@ -5705,7 +6036,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => handleDeleteProduct(prod.id)}
+                                    onClick={() => requestDeleteProducts([prod.id])}
                                     title="Excluir produto"
                                     aria-label={`Excluir ${prod.title}`}
                                     className="p-1.5 rounded-lg border border-transparent hover:border-rose-200 hover:bg-rose-50 text-rose-600 hover:text-rose-800 cursor-pointer transition-colors"
@@ -5813,6 +6144,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -7379,6 +7712,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             setCatDesc(cat.description);
                             setCatIcon(cat.icon);
                           }}
+                          aria-label={`Editar categoria ${cat.name}`}
+                          title={`Editar ${cat.name}`}
                           className="p-1.5 rounded-lg hover:bg-zinc-100 text-zinc-900 cursor-pointer"
                         >
                           <Edit3 className="w-4 h-4" />
@@ -7386,6 +7721,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => handleDeleteCategory(cat.id)}
+                          aria-label={`Excluir categoria ${cat.name}`}
+                          title={`Excluir ${cat.name}`}
                           className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-600 cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -7922,6 +8259,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => handleRemoveNeighborhood(nb.id)}
+                          aria-label={`Remover bairro ${nb.name}`}
+                          title={`Remover ${nb.name}`}
                           className="text-rose-500 hover:text-rose-700 cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -8030,6 +8369,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="picking-slip-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPrintOrder(null);
+          }}
           className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block"
         >
           <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-zinc-300 shadow-2xl space-y-4 my-auto print:shadow-none print:border-0 print:max-w-full print:p-4">
@@ -8048,6 +8390,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setPrintOrder(null)}
+                aria-label="Fechar comanda"
                 className="p-1 text-zinc-400 hover:text-zinc-700 no-print cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -8126,6 +8469,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-start justify-between gap-2 text-xs font-mono text-zinc-900">
                       <span className="font-semibold">
                         [ ] {item.quantity}x {item.title} ({item.volumeLabel})
+                        {item.sku ? ` [Ref: ${item.sku}]` : ''}
                       </span>
                       <span className="tabular-nums shrink-0 font-bold">
                         {isOrderQuoteOnly(printOrder) || item.priceHidden
@@ -8185,6 +8529,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+      <ProductDeleteConfirmModal
+        productsToDelete={products.filter((p) =>
+          pendingDeleteProductIds.includes(p.id)
+        )}
+        categories={categories}
+        onConfirm={handleConfirmDeleteProducts}
+        onCancel={() => setPendingDeleteProductIds([])}
+      />
     </section>
   </div>
   );

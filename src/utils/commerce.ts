@@ -9,6 +9,7 @@ import {
   CustomerPrivacyPrefs,
   CustomerProfile,
   CustomerSegment,
+  DeletedProductEntry,
   DeliveryCityOption,
   DeliveryType,
   LogisticsDeliveryMode,
@@ -3717,6 +3718,157 @@ export function autoRepairCatalogIntegrity(data: {
     coupons: nextCoupons,
     banners: nextBanners,
     fixesApplied,
+  };
+}
+
+// --- PRODUCT TRASH BIN (SOFT DELETE, RESTORE & PERMANENT DELETE) ---
+
+export function moveProductsToTrash(
+  products: Product[],
+  trash: DeletedProductEntry[],
+  productIds: string[],
+  deletedBy: string,
+  deletedAt: string = new Date().toISOString()
+): {
+  nextProducts: Product[];
+  nextTrash: DeletedProductEntry[];
+  movedEntries: DeletedProductEntry[];
+} {
+  const idSet = new Set(productIds);
+  if (idSet.size === 0) {
+    return { nextProducts: products, nextTrash: trash, movedEntries: [] };
+  }
+
+  const movedEntries: DeletedProductEntry[] = [];
+  const nextProducts: Product[] = [];
+
+  products.forEach((product, idx) => {
+    if (idSet.has(product.id)) {
+      movedEntries.push({
+        product,
+        deletedAt,
+        deletedBy: deletedBy.trim() || 'Administrador',
+        originalIndex: idx,
+      });
+    } else {
+      nextProducts.push(product);
+    }
+  });
+
+  if (movedEntries.length === 0) {
+    return { nextProducts: products, nextTrash: trash, movedEntries: [] };
+  }
+
+  const movedIdSet = new Set(movedEntries.map((e) => e.product.id));
+  const filteredExistingTrash = trash.filter((e) => !movedIdSet.has(e.product.id));
+  const nextTrash = [...movedEntries, ...filteredExistingTrash];
+
+  return { nextProducts, nextTrash, movedEntries };
+}
+
+export function restoreProductFromTrash(
+  products: Product[],
+  trash: DeletedProductEntry[],
+  productId: string,
+  categories: Pick<Category, 'id'>[],
+  kitSkus: string[] = []
+): {
+  nextProducts: Product[];
+  nextTrash: DeletedProductEntry[];
+  restoredProduct: Product | null;
+  skuReassigned: boolean;
+  categoryReassigned: boolean;
+} {
+  const targetEntry = trash.find((e) => e.product.id === productId);
+  if (!targetEntry) {
+    return {
+      nextProducts: products,
+      nextTrash: trash,
+      restoredProduct: null,
+      skuReassigned: false,
+      categoryReassigned: false,
+    };
+  }
+
+  const nextTrash = trash.filter((e) => e.product.id !== productId);
+  let restoredProduct: Product = { ...targetEntry.product };
+  let categoryReassigned = false;
+  let skuReassigned = false;
+
+  // Ensure restored product belongs to an existing category
+  const validCatIds = new Set(categories.map((c) => c.id));
+  if (categories.length > 0 && !validCatIds.has(restoredProduct.categoryId)) {
+    restoredProduct = {
+      ...restoredProduct,
+      categoryId: categories[0].id,
+    };
+    categoryReassigned = true;
+  }
+
+  // Ensure restored product does not collide with an existing SKU
+  const existingSkus = [
+    ...products.map((p) => p.sku.trim().toUpperCase()),
+    ...kitSkus.map((s) => s.trim().toUpperCase()),
+  ].filter(Boolean);
+  const existingSkuSet = new Set(existingSkus);
+  const currentSkuNorm = restoredProduct.sku.trim().toUpperCase();
+  if (!currentSkuNorm || existingSkuSet.has(currentSkuNorm)) {
+    restoredProduct = {
+      ...restoredProduct,
+      sku: generateAutoSku({
+        kind: 'product',
+        existingSkus,
+        preferredPrefix: currentSkuNorm || undefined,
+        mode: 'sequential',
+      }),
+    };
+    skuReassigned = true;
+  }
+
+  // Re-insert cleanly at original position (clamped to valid bounds)
+  const insertAt = Math.min(
+    Math.max(0, targetEntry.originalIndex),
+    products.length
+  );
+  const nextProducts = [
+    ...products.slice(0, insertAt),
+    restoredProduct,
+    ...products.slice(insertAt),
+  ];
+
+  return {
+    nextProducts,
+    nextTrash,
+    restoredProduct,
+    skuReassigned,
+    categoryReassigned,
+  };
+}
+
+export function permanentlyDeleteFromTrash(
+  trash: DeletedProductEntry[],
+  productId: string
+): {
+  nextTrash: DeletedProductEntry[];
+  removedEntry: DeletedProductEntry | null;
+} {
+  const removedEntry = trash.find((e) => e.product.id === productId) || null;
+  if (!removedEntry) {
+    return { nextTrash: trash, removedEntry: null };
+  }
+  return {
+    nextTrash: trash.filter((e) => e.product.id !== productId),
+    removedEntry,
+  };
+}
+
+export function emptyProductTrash(trash: DeletedProductEntry[]): {
+  nextTrash: DeletedProductEntry[];
+  removedCount: number;
+} {
+  return {
+    nextTrash: [],
+    removedCount: trash.length,
   };
 }
 

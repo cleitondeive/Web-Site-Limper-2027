@@ -3,6 +3,7 @@ import {
   CartItem,
   Category,
   CustomerProfile,
+  DeletedProductEntry,
   Order,
   Product,
   PromoBanner,
@@ -37,6 +38,7 @@ const STORAGE_KEYS = {
   SECURITY_LOGS: 'limper_mt_security_logs_v1',
   ADMIN_USERS: 'limper_mt_admin_users_v1',
   SITE_BACKUPS: 'limper_mt_site_backups_v1',
+  DELETED_PRODUCTS: 'limper_mt_deleted_products_v1',
 };
 
 const IDB_NAME = 'LimperMT_Database';
@@ -159,6 +161,16 @@ export const storageService = {
     loadFromStorage<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS),
   saveProducts: (products: Product[]) =>
     saveToStorage(STORAGE_KEYS.PRODUCTS, products),
+
+  getDeletedProducts: (): DeletedProductEntry[] => {
+    const loaded = loadFromStorage<DeletedProductEntry[]>(
+      STORAGE_KEYS.DELETED_PRODUCTS,
+      []
+    );
+    return Array.isArray(loaded) ? loaded : [];
+  },
+  saveDeletedProducts: (entries: DeletedProductEntry[]) =>
+    saveToStorage(STORAGE_KEYS.DELETED_PRODUCTS, entries),
 
   getOrders: (): Order[] =>
     loadFromStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),

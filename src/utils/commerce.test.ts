@@ -29,6 +29,7 @@ import {
   deriveFrequentlyBoughtProducts,
   duplicateMultipleProducts,
   duplicateProductItem,
+  emptyProductTrash,
   evaluateCoupon,
   evaluateLogisticsEligibility,
   filterOrdersByCriteria,
@@ -73,13 +74,16 @@ import {
   matchesOrderCodeExact,
   mergeOrderIntoCart,
   moveProductStep,
+  moveProductsToTrash,
   normalizeAdminUsername,
   normalizeHexColor,
   paginateItems,
   parseImportedSiteBackupJson,
+  permanentlyDeleteFromTrash,
   reorderProductsById,
   resolveCustomerVisibleOrders,
   resolveProductBadgeStyle,
+  restoreProductFromTrash,
   sanitizeTargetForAuditLog,
   setDefaultCustomerAddress,
   summarizeOrdersPeriod,
@@ -2076,6 +2080,92 @@ test('generateAutoSku produces unique AAA-000 codes for products and kits and va
   const builtProduct = buildKitCartProduct(kitWithSku, INITIAL_PRODUCTS);
   assert.equal(builtProduct.sku, 'KIT-250');
 });
+
+test('moveProductsToTrash, restoreProductFromTrash, permanentlyDeleteFromTrash and emptyProductTrash manage soft deletion safely', () => {
+  const sample = INITIAL_PRODUCTS.slice(0, 5);
+  const targetA = sample[0];
+  const targetB = sample[2];
+
+  // 1. Soft-delete single product moves it to trash with metadata & original index
+  const del1 = moveProductsToTrash(
+    sample,
+    [],
+    [targetA.id],
+    'Administrador Master (@admin)',
+    '2026-11-24T15:50:00.000Z'
+  );
+  assert.equal(del1.nextProducts.length, 4);
+  assert.equal(del1.nextTrash.length, 1);
+  assert.equal(del1.movedEntries.length, 1);
+  assert.equal(del1.nextTrash[0].product.id, targetA.id);
+  assert.equal(del1.nextTrash[0].originalIndex, 0);
+  assert.equal(del1.nextTrash[0].deletedBy, 'Administrador Master (@admin)');
+
+  // 2. Soft-delete another product prepends to trash
+  const del2 = moveProductsToTrash(
+    del1.nextProducts,
+    del1.nextTrash,
+    [targetB.id],
+    'Operador (@op)',
+    '2026-11-24T15:55:00.000Z'
+  );
+  assert.equal(del2.nextProducts.length, 3);
+  assert.equal(del2.nextTrash.length, 2);
+  assert.equal(del2.nextTrash[0].product.id, targetB.id);
+
+  // 3. Restoring targetA puts it back at originalIndex 0 without modifying SKU/category
+  const restoredA = restoreProductFromTrash(
+    del2.nextProducts,
+    del2.nextTrash,
+    targetA.id,
+    INITIAL_CATEGORIES
+  );
+  assert.equal(restoredA.restoredProduct?.id, targetA.id);
+  assert.equal(restoredA.nextProducts[0].id, targetA.id);
+  assert.equal(restoredA.nextTrash.length, 1);
+  assert.equal(restoredA.skuReassigned, false);
+  assert.equal(restoredA.categoryReassigned, false);
+
+  // 4. Restoring when SKU is now taken and original category was removed auto-repairs both
+  const productsWithCollision = [
+    ...restoredA.nextProducts,
+    { ...restoredA.nextProducts[0], id: 'prod-collider', sku: targetB.sku },
+  ];
+  const remainingCategories = INITIAL_CATEGORIES.filter(
+    (c) => c.id !== targetB.categoryId
+  );
+  const restoredB = restoreProductFromTrash(
+    productsWithCollision,
+    restoredA.nextTrash,
+    targetB.id,
+    remainingCategories
+  );
+  assert.ok(restoredB.restoredProduct !== null);
+  assert.equal(restoredB.skuReassigned, true);
+  assert.match(restoredB.restoredProduct!.sku, /^[A-Z]{3}-\d{3}$/);
+  assert.notEqual(restoredB.restoredProduct!.sku, targetB.sku);
+  assert.equal(restoredB.categoryReassigned, true);
+  assert.equal(restoredB.restoredProduct!.categoryId, remainingCategories[0].id);
+  assert.equal(restoredB.nextTrash.length, 0);
+
+  // 5. Permanent delete single item and empty trash
+  const delBoth = moveProductsToTrash(
+    sample,
+    [],
+    [targetA.id, targetB.id],
+    'Administrador Master (@admin)'
+  );
+  assert.equal(delBoth.nextTrash.length, 2);
+
+  const perm1 = permanentlyDeleteFromTrash(delBoth.nextTrash, targetA.id);
+  assert.equal(perm1.removedEntry?.product.id, targetA.id);
+  assert.equal(perm1.nextTrash.length, 1);
+
+  const emptied = emptyProductTrash(perm1.nextTrash);
+  assert.equal(emptied.removedCount, 1);
+  assert.equal(emptied.nextTrash.length, 0);
+});
+
 
 
 

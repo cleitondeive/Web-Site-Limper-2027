@@ -73,6 +73,13 @@ export interface Product {
   kitItems?: KitComponentSnapshot[]; // Produtos inclusos quando o item é um Kit/Combo
 }
 
+export interface DeletedProductEntry {
+  product: Product;
+  deletedAt: string; // ISO string
+  deletedBy: string; // Nome/login do administrador que excluiu
+  originalIndex: number; // Posição original no catálogo para restauração fiel
+}
+
 export interface CartItem {
   product: Product;
   quantity: number;
