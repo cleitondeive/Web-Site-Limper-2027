@@ -5,7 +5,9 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  BarChart3,
   Bike,
+  Briefcase,
   Calendar,
   Check,
   CheckCircle2,
@@ -84,6 +86,8 @@ import {
   PromoCoupon,
   PromoKit,
   SecurityAuditEvent,
+  SellerCustomProduct,
+  SellerQuote,
   SiteBackupSnapshot,
   StoreSettings,
   UnitOfMeasure,
@@ -116,6 +120,7 @@ import {
   formatPageNumberLabel,
   formatPaymentMethodLabel,
   formatPhone,
+  formatStoreWhatsAppDisplay,
   generateAutoSku,
   generateNextOrderNumber,
   getAdjacentOrderStatus,
@@ -132,6 +137,7 @@ import {
   moveProductsToTrash,
   normalizeHexColor,
   normalizePhone,
+  normalizeStoreWhatsAppNumber,
   paginateItems,
   permanentlyDeleteFromTrash,
   reorderProductsById,
@@ -160,8 +166,11 @@ import {
   ProductImageWithFallback,
 } from './CategoryIcon';
 import { AdminCommandPalette } from './AdminCommandPalette';
+import { AdminSalesSummary } from './AdminSalesSummary';
 import { AdminSecurityTab } from './AdminSecurityTab';
+import { AdminSellerArea } from './AdminSellerArea';
 import { AdminUserAvatar, AdminUsersTab } from './AdminUsersTab';
+import { AdminWhatsAppManager } from './AdminWhatsAppManager';
 import { BadgeColorPicker } from './BadgeColorPicker';
 import { BackupReminderNotification } from './BackupReminderNotification';
 import {
@@ -281,11 +290,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleRestoreBackupSnapshot = (snapshot: SiteBackupSnapshot) => {
+    const p = snapshot.payload;
+    if (Array.isArray(p.sellerQuotes)) {
+      persistSellerQuotes(p.sellerQuotes);
+    }
+    if (Array.isArray(p.sellerCustomProducts)) {
+      persistSellerCustomProducts(p.sellerCustomProducts);
+    }
     if (onRestoreSiteBackup) {
       onRestoreSiteBackup(snapshot);
       return;
     }
-    const p = snapshot.payload;
     onSaveCategories(p.categories);
     onSaveProducts(p.products);
     onSaveKits(p.kits);
@@ -395,6 +410,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [deletedProducts, setDeletedProducts] = useState<DeletedProductEntry[]>(() =>
     storageService.getDeletedProducts()
   );
+  const [sellerQuotes, setSellerQuotes] = useState<SellerQuote[]>(() =>
+    storageService.getSellerQuotes()
+  );
+  const persistSellerQuotes = (next: SellerQuote[]) => {
+    setSellerQuotes(next);
+    storageService.saveSellerQuotes(next);
+  };
+  const [sellerCustomProducts, setSellerCustomProducts] = useState<SellerCustomProduct[]>(
+    () => storageService.getSellerCustomProducts()
+  );
+  const persistSellerCustomProducts = (next: SellerCustomProduct[]) => {
+    setSellerCustomProducts(next);
+    storageService.saveSellerCustomProducts(next);
+  };
   const [pendingDeleteProductIds, setPendingDeleteProductIds] = useState<string[]>([]);
   const [productActionFeedback, setProductActionFeedback] = useState<{
     message: string;
@@ -706,6 +735,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         settings,
         adminUsers: effectiveAdminUsers,
         securityLogs,
+        sellerQuotes,
+        sellerCustomProducts,
       },
       trigger: 'manual',
       label: 'Backup rápido via lembrete de segurança',
@@ -2382,21 +2413,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Settings Handlers
+  const handleUpdateWhatsAppSettings = (nextSettings: StoreSettings) => {
+    setFormSettings(nextSettings);
+    onSaveSettings(nextSettings);
+  };
+
   const handleSaveSettingsSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSettingsFormError(null);
-    const validation = validateStoreSettingsDraft(formSettings);
+    const normalizedWa =
+      normalizeStoreWhatsAppNumber(formSettings.whatsappNumber) ||
+      formSettings.whatsappNumber;
+    const normalizedFormSettings: StoreSettings = {
+      ...formSettings,
+      whatsappNumber: normalizedWa,
+      whatsappDisplay:
+        formatStoreWhatsAppDisplay(normalizedWa) || formSettings.whatsappDisplay,
+    };
+    const validation = validateStoreSettingsDraft(normalizedFormSettings);
     if (!validation.valid) {
       setSettingsFormError(validation.error || 'Confira os valores numéricos de frete e logística.');
       return;
     }
-    onSaveSettings(formSettings);
+    setFormSettings(normalizedFormSettings);
+    onSaveSettings(normalizedFormSettings);
     recordAdminAction({
       category: 'catalog_policy',
       outcome: 'info',
-      rawTarget: formSettings.storeName || 'Limper MT',
-      summary: 'Configurações de Loja, PIX & Frete atualizadas',
-      detail: `Parâmetros operacionais e logística salvos no painel.`,
+      rawTarget: normalizedFormSettings.storeName || 'Limper MT',
+      summary: 'Configurações de WhatsApp, Loja, PIX & Frete atualizadas',
+      detail: `Parâmetros operacionais, WhatsApp (${normalizedFormSettings.whatsappDisplay}) e logística salvos no painel.`,
     });
     setSavedSettingsBanner(true);
     setTimeout(() => setSavedSettingsBanner(false), 3000);
@@ -2688,11 +2734,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       icon: FolderKanban,
     },
     {
+      id: 'sales_summary',
+      label: 'Resumo de Vendas',
+      shortLabel: 'Resumo',
+      icon: BarChart3,
+    },
+    {
       id: 'products',
       label: 'Produtos & Fotos',
       shortLabel: 'Produtos',
       badge: products.length,
       icon: Package,
+    },
+    {
+      id: 'seller_area',
+      label: 'Área do Vendedor',
+      shortLabel: 'Vendedor',
+      badge: sellerQuotes.length > 0 ? sellerQuotes.length : undefined,
+      icon: Briefcase,
     },
     {
       id: 'kits',
@@ -2748,8 +2807,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     },
     {
       id: 'settings',
-      label: 'Loja, PIX & Frete',
-      shortLabel: 'Loja & Frete',
+      label: 'WhatsApp, Loja & Frete',
+      shortLabel: 'WhatsApp & Loja',
       icon: Settings,
     },
   ];
@@ -3223,7 +3282,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="p-3 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] space-y-1.5 w-full">
+              <div className="p-3 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] space-y-2 w-full">
                 <div className="flex items-center gap-1.5 font-extrabold text-xs text-zinc-900">
                   <Store className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
                   <span>Unidade Várzea Grande - MT</span>
@@ -3231,9 +3290,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <p className="text-[11px] text-zinc-600 leading-snug">
                   {settings.storeAddress}
                 </p>
-                <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-zinc-900 pt-1.5 border-t border-amber-200/70">
-                  <Phone className="w-3 h-3 text-[#E3262E] shrink-0" />
-                  <span>{settings.whatsappDisplay}</span>
+                <div className="pt-1.5 border-t border-amber-200/70 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[10px] font-mono uppercase font-extrabold text-emerald-800">
+                      WhatsApp Orçamentos
+                    </span>
+                    {settings.activeWhatsAppLabel && (
+                      <span className="text-[10px] font-bold text-zinc-500 truncate max-w-[95px]">
+                        {settings.activeWhatsAppLabel}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-zinc-900">
+                    <Phone className="w-3 h-3 text-[#16A34A] shrink-0" />
+                    <span>{settings.whatsappDisplay}</span>
+                  </div>
+                  {canAdminUserAccessTab(currentAdminUser, 'settings') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('settings');
+                        window.setTimeout(() => {
+                          document
+                            .getElementById('admin-whatsapp-manager')
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }, 60);
+                      }}
+                      className="w-full py-1.5 px-2.5 rounded-lg bg-white hover:bg-emerald-50 border border-amber-300 hover:border-emerald-400 text-[11px] font-extrabold text-zinc-900 inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5 text-[#16A34A]" />
+                      <span>Trocar WhatsApp</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -3432,6 +3520,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               </div>
             )}
+
+          {/* TAB: RESUMO DE VENDAS (ÁREA DEDICADA DE GRÁFICOS & PERFORMANCE DO CATÁLOGO) */}
+          {activeTab === 'sales_summary' && (
+            <AdminSalesSummary
+              orders={orders}
+              products={products}
+              categories={categories}
+              deletedProducts={deletedProducts}
+              onOpenManualPos={
+                canAdminUserAccessTab(currentAdminUser, 'kanban')
+                  ? () => {
+                      setActiveTab('kanban');
+                      setIsManualPosOpen(true);
+                    }
+                  : undefined
+              }
+              onGoToKanban={
+                canAdminUserAccessTab(currentAdminUser, 'kanban')
+                  ? () => setActiveTab('kanban')
+                  : undefined
+              }
+            />
+          )}
 
           {/* TAB 1: KANBAN DE SEPARAÇÃO DE PEDIDOS + REVERSÃO DE ETAPAS + FILTRO DE DATAS E HISTÓRICO */}
           {activeTab === 'kanban' && (() => {
@@ -3920,7 +4031,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
                       <div>
                         <span className="text-[10px] font-mono uppercase font-extrabold text-[#E3262E]">
-                          PDV RÁPIDO · ATENDIMENTO PRESENCIAL OU TELEFONE (65) 3029-6824
+                          PDV RÁPIDO · ATENDIMENTO PRESENCIAL OU TELEFONE {settings.whatsappDisplay}
                         </span>
                         <h3 className="font-display text-base font-extrabold text-zinc-900">
                           Lançar Pedido de Balcão / Telefone (Gera Comanda Automática)
@@ -7971,13 +8082,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {/* TAB 5: CONFIGURAÇÕES GERAIS (WHATSAPP, PIX, FRETE) */}
           {activeTab === 'settings' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 no-print">
+            <div className="space-y-6 no-print">
+              {/* Dedicated WhatsApp Registration & 1-Click Switcher for Quotes/Orders */}
+              <AdminWhatsAppManager
+                settings={settings}
+                actorLabel={formatAdminActorLabel(currentAdminUser)}
+                actorUsername={currentAdminUser?.username}
+                actorRole={currentAdminUser?.role}
+                onUpdateSettings={handleUpdateWhatsAppSettings}
+                onRecordSecurityEvent={(input) => onRecordSecurityEvent?.(input)}
+              />
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <form
                 onSubmit={handleSaveSettingsSubmit}
                 className="lg:col-span-7 bg-white p-6 rounded-2xl border border-zinc-200 space-y-4"
               >
                 <h2 className="font-display text-lg font-extrabold text-zinc-900">
-                  Dados de Recebimento PIX, Endereço & Telefone Oficial
+                  Dados de Recebimento PIX, Endereço &amp; Logística
                 </h2>
 
                 {settingsFormError && (
@@ -7997,33 +8119,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
-                      WhatsApp / Telefone Destino (Com DDI 55 + DDD)
-                    </label>
-                    <input
-                      type="text"
-                      value={formSettings.whatsappNumber}
-                      onChange={(e) =>
-                        setFormSettings({ ...formSettings, whatsappNumber: e.target.value })
-                      }
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
-                    />
+                <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <MessageCircle className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span className="text-zinc-700">
+                      WhatsApp ativo nos orçamentos:{' '}
+                      <strong className="font-mono text-zinc-950">
+                        {settings.whatsappDisplay}
+                      </strong>
+                    </span>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-zinc-700 mb-1">
-                      Telefone de Exibição Oficial
-                    </label>
-                    <input
-                      type="text"
-                      value={formSettings.whatsappDisplay}
-                      onChange={(e) =>
-                        setFormSettings({ ...formSettings, whatsappDisplay: e.target.value })
-                      }
-                      className="w-full px-3 py-2 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-mono"
-                    />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      document
+                        .getElementById('admin-whatsapp-manager')
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                    className="text-[11px] font-extrabold text-emerald-800 hover:underline cursor-pointer"
+                  >
+                    Alterar no painel acima
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -8429,7 +8545,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   ))}
                 </div>
               </div>
+              </div>
             </div>
+          )}
+
+          {/* TAB: ÁREA DO VENDEDOR (ORÇAMENTOS COM PDF E WHATSAPP) */}
+          {activeTab === 'seller_area' && (
+            <AdminSellerArea
+              currentAdminUser={currentAdminUser}
+              products={products}
+              kits={kits}
+              categories={categories}
+              settings={settings}
+              quotes={sellerQuotes}
+              onSaveQuotes={persistSellerQuotes}
+              sellerCustomProducts={sellerCustomProducts}
+              onSaveSellerCustomProducts={persistSellerCustomProducts}
+              onRecordSecurityEvent={(input) => onRecordSecurityEvent?.(input)}
+            />
           )}
 
           {/* TAB: USUÁRIOS & ACESSOS (EXCLUSIVO MASTER) */}
@@ -8469,6 +8602,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 settings,
                 adminUsers: effectiveAdminUsers,
                 securityLogs,
+                sellerQuotes,
+                sellerCustomProducts,
               }}
               onSaveSiteBackups={persistSiteBackups}
               onSaveBackupSchedule={persistBackupSchedule}

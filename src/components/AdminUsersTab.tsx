@@ -60,6 +60,7 @@ interface AdminUsersTabProps {
 const ROLE_ORDER: AdminRoleLevel[] = [
   'master',
   'manager',
+  'seller',
   'operator',
   'catalog',
   'viewer',
@@ -957,6 +958,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                       <button
                         key={level}
                         type="button"
+                        data-role={level}
                         onClick={() => handleSelectRole(level)}
                         className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer space-y-1.5 ${
                           selected
@@ -1022,6 +1024,14 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                         className="font-bold text-zinc-700 hover:text-zinc-950 underline cursor-pointer"
                       >
                         Marcar Todas
+                      </button>
+                      <span className="text-zinc-300">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setAllowedTabs(['seller_area'])}
+                        className="font-bold text-amber-700 hover:text-zinc-950 underline cursor-pointer"
+                      >
+                        Somente Vendedor
                       </button>
                       <span className="text-zinc-300">·</span>
                       <button

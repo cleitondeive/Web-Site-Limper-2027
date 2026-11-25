@@ -54,6 +54,7 @@ import {
   appendSiteBackupSnapshot,
   buildKitCartProduct,
   buildLogisticsWhatsAppConsultUrl,
+  buildStoreWhatsAppHref,
   calculateCartTotals,
   calculateKitPricing,
   computePayloadChecksum,
@@ -802,6 +803,8 @@ export default function App() {
             isCartQuoteOnly={cartTotals.isQuoteOnly}
             ordersCount={customerLoggedIn ? customerScopedOrders.length : 0}
             hideAllPrices={allCatalogPricesHidden}
+            storeWhatsappNumber={settings.whatsappNumber}
+            storeWhatsappDisplay={settings.whatsappDisplay}
             customerProfile={customerProfile}
             searchQuery={searchQuery}
             onSearchChange={(q) => {
@@ -1631,7 +1634,7 @@ export default function App() {
 
                   <div className="text-[11px] font-bold flex items-center justify-between border-t border-amber-500/40 pt-2.5">
                     <span>Retirada Grátis em 15min</span>
-                    <span>Central: (65) 3029-6824</span>
+                    <span>Central: {settings.whatsappDisplay}</span>
                   </div>
                 </div>
               </div>
@@ -1903,7 +1906,7 @@ export default function App() {
                         Seg a Sex: 07h30 às 18h00 · Sáb: 07h30 às 13h00
                       </p>
                       <p className="font-mono font-extrabold text-zinc-900">
-                        Telefone: (65) 3029-6824
+                        WhatsApp / Central: {settings.whatsappDisplay}
                       </p>
                     </div>
                   </div>
@@ -1960,7 +1963,7 @@ export default function App() {
                       <span>Abrir Rota no Mapa</span>
                     </a>
                     <a
-                      href={`https://wa.me/${settings.whatsappNumber}`}
+                      href={buildStoreWhatsAppHref(settings.whatsappNumber)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="py-2.5 px-3 rounded-xl bg-[#25D366] hover:bg-[#1DA851] text-zinc-950 font-extrabold text-xs flex items-center justify-center gap-1.5"
@@ -2479,7 +2482,7 @@ export default function App() {
 
             <div className="flex flex-wrap items-center gap-3.5">
               <a
-                href={`https://wa.me/${settings.whatsappNumber}`}
+                href={buildStoreWhatsAppHref(settings.whatsappNumber)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-zinc-900 hover:text-[#E3262E] font-bold transition-colors"

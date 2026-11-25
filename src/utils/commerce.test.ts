@@ -9,6 +9,7 @@ import {
   DEFAULT_HIGHLIGHT_BADGE_COLOR,
   DEFAULT_PROMO_BADGE_COLOR,
   PROMO_BADGE_COLOR_PRESETS,
+  activateStoreWhatsAppNumber,
   addToCart,
   appendSecurityAuditEvent,
   appendSiteBackupSnapshot,
@@ -19,10 +20,16 @@ import {
   buildKitCartProduct,
   buildLogisticsWhatsAppConsultUrl,
   buildSecurityAuditCsv,
+  buildSellerQuoteWhatsAppMessage,
+  buildSellerQuoteWhatsAppUrl,
+  buildStoreTelHref,
+  buildStoreWhatsAppHref,
   buildWhatsAppOrderMessage,
   buildWhatsAppOrderUrl,
   calculateCartTotals,
   calculateKitPricing,
+  calculateSellerQuoteInstallment,
+  calculateSellerQuoteTotals,
   canAdminUserAccessTab,
   canonicalBrazilPhone,
   computePayloadChecksum,
@@ -52,8 +59,11 @@ import {
   formatLogisticsModeLabel,
   formatPageNumberLabel,
   formatPhone,
+  formatSellerQuotePaymentSummary,
+  formatStoreWhatsAppDisplay,
   generateAutoSku,
   generateNextOrderNumber,
+  generateNextQuoteNumber,
   getAdjacentOrderStatus,
   getContrastTextColor,
   getCustomerAddresses,
@@ -85,6 +95,7 @@ import {
   normalizeAdminUsername,
   normalizeHexColor,
   normalizeScheduleTime,
+  normalizeStoreWhatsAppNumber,
   paginateItems,
   parseImportedSiteBackupJson,
   permanentlyDeleteFromTrash,
@@ -109,7 +120,10 @@ import {
   validateCouponDraft,
   validateKitDraft,
   validateProductDraft,
+  validateSellerQuoteDraft,
   validateStoreSettingsDraft,
+  buildSalesSummaryAnalytics,
+  validateStoreWhatsAppInput,
   verifySiteBackupIntegrity,
 } from './commerce';
 import {
@@ -2444,6 +2458,411 @@ test('47. Backup reminder evaluates >24h overdue threshold, Toast/Modal style, s
   assert.equal(custom48Eval.shouldNotify, false);
   assert.equal(custom48Eval.reason, 'recent_backup');
 });
+
+test('48. Store WhatsApp manager normalizes BR numbers, validates DDD, rotates directory contacts, and routes quotes/orders', () => {
+  // Normalization always adds DDI 55 and strips leading zero
+  assert.equal(normalizeStoreWhatsAppNumber('(65) 99911-2233'), '5565999112233');
+  assert.equal(normalizeStoreWhatsAppNumber('065999112233'), '5565999112233');
+  assert.equal(normalizeStoreWhatsAppNumber('556530296824'), '556530296824');
+  assert.equal(normalizeStoreWhatsAppNumber('12345'), '');
+
+  // Display formatting
+  assert.equal(formatStoreWhatsAppDisplay('5565999112233'), '(65) 99911-2233');
+  assert.equal(formatStoreWhatsAppDisplay('556530296824'), '(65) 3029-6824');
+
+  // Href builders always normalize with DDI 55
+  assert.equal(
+    buildStoreWhatsAppHref('(65) 99911-2233'),
+    'https://wa.me/5565999112233'
+  );
+  assert.equal(buildStoreTelHref('(65) 99911-2233'), 'tel:+5565999112233');
+
+  // Validation rejects short numbers or invalid DDD
+  assert.equal(validateStoreWhatsAppInput('99911').valid, false);
+  assert.equal(validateStoreWhatsAppInput('(00) 99911-2233').valid, false);
+  const okVal = validateStoreWhatsAppInput('(65) 98123-4567');
+  assert.equal(okVal.valid, true);
+  assert.equal(okVal.normalizedNumber, '5565981234567');
+  assert.equal(okVal.formattedDisplay, '(65) 98123-4567');
+
+  // Activating a new WhatsApp number updates active fields, preserves old number in directory, and routes quote/order URLs
+  const switched = activateStoreWhatsAppNumber(INITIAL_STORE_SETTINGS, {
+    phoneInput: '(65) 98123-4567',
+    label: 'Plantão Vendedor Lucas',
+    note: 'Atendimento Orçamentos',
+    saveToDirectory: true,
+  });
+  assert.equal(switched.whatsappNumber, '5565981234567');
+  assert.equal(switched.whatsappDisplay, '(65) 98123-4567');
+  assert.equal(switched.activeWhatsAppLabel, 'Plantão Vendedor Lucas');
+  assert.equal(switched.whatsappContacts?.length, 2);
+
+  // Quotes & orders immediately route to the newly activated WhatsApp number
+  const consultUrl = buildLogisticsWhatsAppConsultUrl(switched.whatsappNumber, 'Sinop');
+  assert.ok(consultUrl.startsWith('https://wa.me/5565981234567?text='));
+
+  const sampleOrder = INITIAL_ORDERS[0];
+  const orderUrl = buildWhatsAppOrderUrl(switched.whatsappNumber, sampleOrder);
+  assert.ok(orderUrl.startsWith('https://wa.me/5565981234567?text='));
+});
+
+test('49. Seller RBAC restricts seller role exclusively to seller_area and Seller Quote engine calculates, validates, and routes quotes to active system WhatsApp', () => {
+  // 1. RBAC: seller role receives ONLY seller_area by default and cannot access any other tab
+  const sellerUser = {
+    id: 'usr-seller-1',
+    name: 'Carlos Vendedor',
+    username: 'vendedor1',
+    password: 'vendas123',
+    role: 'seller' as const,
+    allowedTabs: ['seller_area' as const],
+    active: true,
+    createdAt: new Date().toISOString(),
+  };
+
+  assert.deepEqual(getEffectiveAllowedTabs(sellerUser), ['seller_area']);
+  assert.equal(canAdminUserAccessTab(sellerUser, 'seller_area'), true);
+  assert.equal(canAdminUserAccessTab(sellerUser, 'kanban'), false);
+  assert.equal(canAdminUserAccessTab(sellerUser, 'products'), false);
+  assert.equal(canAdminUserAccessTab(sellerUser, 'users'), false);
+  assert.equal(canAdminUserAccessTab(sellerUser, 'security'), false);
+  assert.equal(canAdminUserAccessTab(sellerUser, 'settings'), false);
+
+  // Master still automatically has seller_area access via ALL_ADMIN_TABS
+  const masterUser = DEFAULT_ADMIN_USERS[0];
+  assert.equal(ALL_ADMIN_TABS.includes('seller_area'), true);
+  assert.equal(canAdminUserAccessTab(masterUser, 'seller_area'), true);
+
+  // 2. Quote sequential numbering
+  assert.equal(generateNextQuoteNumber([]), 'ORC-1001');
+  assert.equal(
+    generateNextQuoteNumber([
+      {
+        id: 'ORC-1004',
+        createdAt: new Date().toISOString(),
+        validUntilDate: '2026-12-01',
+        sellerName: 'Carlos Vendedor',
+        customerName: 'Cliente A',
+        customerPhone: '65999990000',
+        deliveryType: 'delivery',
+        paymentTerms: 'PIX / À Vista',
+        items: [],
+        subtotal: 0,
+        discountPercent: 0,
+        discountAmount: 0,
+        deliveryFee: 0,
+        total: 0,
+        targetWhatsappNumber: '5565981234567',
+        targetWhatsappDisplay: '(65) 98123-4567',
+        status: 'draft',
+        pdfGeneratedCount: 0,
+        whatsappSentCount: 0,
+      },
+    ]),
+    'ORC-1005'
+  );
+
+  // 3. Totals calculation & validation
+  const items = [
+    {
+      id: 'item-1',
+      title: 'Detergente Neutro 5L',
+      sku: 'QMP-101',
+      volumeLabel: '5L',
+      quantity: 4,
+      unitPrice: 25,
+      subtotal: 100,
+    },
+    {
+      id: 'item-2',
+      title: 'Desinfetante Floral 5L',
+      sku: 'QMP-102',
+      volumeLabel: '5L',
+      quantity: 2,
+      unitPrice: 30,
+      subtotal: 60,
+    },
+  ];
+  const totals = calculateSellerQuoteTotals(items, 10, 15);
+  assert.equal(totals.subtotal, 160);
+  assert.equal(totals.discountAmount, 16);
+  assert.equal(totals.deliveryFee, 15);
+  assert.equal(totals.total, 159);
+  assert.equal(totals.itemCount, 6);
+
+  assert.equal(
+    validateSellerQuoteDraft({ customerName: '', items }).valid,
+    false
+  );
+  assert.equal(
+    validateSellerQuoteDraft({ customerName: 'Hotel Cuiabá', items: [] }).valid,
+    false
+  );
+  assert.equal(
+    validateSellerQuoteDraft({
+      customerName: 'Hotel Cuiabá',
+      items,
+      discountPercent: 10,
+      deliveryFee: 15,
+    }).valid,
+    true
+  );
+
+  // 4. WhatsApp message & dynamic system WhatsApp routing
+  const customSettings = activateStoreWhatsAppNumber(INITIAL_STORE_SETTINGS, {
+    phoneInput: '(65) 98123-4567',
+    label: 'WhatsApp Orçamentos',
+  });
+  const quote = {
+    id: 'ORC-1001',
+    createdAt: new Date().toISOString(),
+    validUntilDate: '2026-12-02',
+    sellerName: 'Carlos Vendedor',
+    sellerUsername: 'vendedor1',
+    customerName: 'Condomínio Florais Cuiabá',
+    customerPhone: '65992223344',
+    deliveryType: 'delivery' as const,
+    paymentTerms: 'PIX / À Vista',
+    items,
+    subtotal: totals.subtotal,
+    discountPercent: totals.discountPercent,
+    discountAmount: totals.discountAmount,
+    deliveryFee: totals.deliveryFee,
+    total: totals.total,
+    targetWhatsappNumber: customSettings.whatsappNumber,
+    targetWhatsappDisplay: customSettings.whatsappDisplay,
+    status: 'sent_whatsapp' as const,
+    pdfGeneratedCount: 1,
+    whatsappSentCount: 1,
+  };
+
+  const msg = buildSellerQuoteWhatsAppMessage(quote, customSettings);
+  assert.ok(msg.includes('#ORC-1001'));
+  assert.ok(msg.includes('Condomínio Florais Cuiabá'));
+  assert.ok(msg.includes('Detergente Neutro 5L'));
+  assert.ok(msg.includes('159,00'));
+
+  const waUrl = buildSellerQuoteWhatsAppUrl(
+    customSettings.whatsappNumber,
+    quote,
+    customSettings
+  );
+  assert.ok(waUrl.startsWith('https://wa.me/5565981234567?text='));
+  assert.ok(decodeURIComponent(waUrl).includes('ORC-1001'));
+});
+
+test('50. Seller Quote supports fixed R$ discount, installments/custom installment value, item notes, and strict hidden-price mode (Sob Consulta)', () => {
+  const items = [
+    {
+      id: 'i-1',
+      title: 'Amaciante Azul 5L',
+      sku: 'QMP-203',
+      volumeLabel: '5L',
+      itemNote: 'Entregar em bombona lacrada',
+      quantity: 2,
+      unitPrice: 50,
+      subtotal: 100,
+    },
+    {
+      id: 'i-2',
+      title: 'Água Sanitária Perfumada 5L',
+      sku: 'QMP-207',
+      volumeLabel: '5L',
+      quantity: 2,
+      unitPrice: 25,
+      subtotal: 50,
+    },
+  ];
+
+  // Fixed R$ discount clamped cleanly and calculates equivalent %
+  const fixedTotals = calculateSellerQuoteTotals(items, 30, 10, 'fixed');
+  assert.equal(fixedTotals.subtotal, 150);
+  assert.equal(fixedTotals.discountType, 'fixed');
+  assert.equal(fixedTotals.discountAmount, 30);
+  assert.equal(fixedTotals.discountPercent, 20);
+  assert.equal(fixedTotals.total, 130);
+
+  // Fixed R$ discount larger than subtotal never produces negative total
+  const clampedTotals = calculateSellerQuoteTotals(items, 999, 0, 'fixed');
+  assert.equal(clampedTotals.discountAmount, 150);
+  assert.equal(clampedTotals.total, 0);
+
+  // Installment auto calculation & custom installment value override
+  const autoInst = calculateSellerQuoteInstallment(130, 4);
+  assert.equal(autoInst.count, 4);
+  assert.equal(autoInst.unitAmount, 32.5);
+  assert.equal(autoInst.isCustomValue, false);
+
+  const customInst = calculateSellerQuoteInstallment(130, 4, 35);
+  assert.equal(customInst.unitAmount, 35);
+  assert.equal(customInst.isCustomValue, true);
+  assert.equal(customInst.financedTotal, 140);
+
+  // Payment summary with visible prices vs hidden prices
+  const visibleSummary = formatSellerQuotePaymentSummary({
+    paymentTerms: 'Cartão de Crédito',
+    installmentCount: 4,
+    installmentInterestFree: true,
+    paymentNotes: '1ª parcela em 30 dias',
+    hidePrices: false,
+    total: 130,
+  });
+  assert.ok(visibleSummary.includes('Cartão de Crédito'));
+  assert.ok(visibleSummary.includes('4x de R$'));
+  assert.ok(visibleSummary.includes('32,50'));
+  assert.ok(visibleSummary.includes('1ª parcela em 30 dias'));
+
+  const hiddenSummary = formatSellerQuotePaymentSummary({
+    paymentTerms: 'Cartão de Crédito',
+    installmentCount: 4,
+    installmentInterestFree: true,
+    hidePrices: true,
+    total: 130,
+  });
+  assert.ok(hiddenSummary.includes('Em até 4x sem juros'));
+  assert.equal(hiddenSummary.includes('R$'), false);
+
+  // WhatsApp message in hidden-price mode NEVER leaks R$ currency figures
+  const hiddenQuote = {
+    id: 'ORC-1002',
+    createdAt: new Date().toISOString(),
+    validUntilDate: '2026-12-10',
+    sellerName: 'Carlos Vendedor',
+    customerName: 'Hotel Pantanal',
+    customerPhone: '65991112233',
+    deliveryType: 'delivery' as const,
+    paymentTerms: 'Cartão de Crédito',
+    installmentCount: 4,
+    installmentInterestFree: true,
+    hidePrices: true,
+    items,
+    subtotal: fixedTotals.subtotal,
+    discountType: 'fixed' as const,
+    discountValue: 30,
+    discountPercent: fixedTotals.discountPercent,
+    discountAmount: fixedTotals.discountAmount,
+    deliveryFee: fixedTotals.deliveryFee,
+    total: fixedTotals.total,
+    targetWhatsappNumber: '5565981234567',
+    targetWhatsappDisplay: '(65) 98123-4567',
+    status: 'draft' as const,
+    pdfGeneratedCount: 0,
+    whatsappSentCount: 0,
+  };
+
+  const hiddenMsg = buildSellerQuoteWhatsAppMessage(hiddenQuote, INITIAL_STORE_SETTINGS);
+  assert.ok(hiddenMsg.includes('Sob Consulta'));
+  assert.ok(hiddenMsg.includes('Entregar em bombona lacrada'));
+  assert.ok(hiddenMsg.includes('Em até 4x sem juros'));
+  assert.equal(hiddenMsg.includes('R$'), false);
+
+  // Visible WhatsApp message includes R$ fixed discount, item note, and installment breakdown
+  const visibleMsg = buildSellerQuoteWhatsAppMessage(
+    { ...hiddenQuote, hidePrices: false },
+    INITIAL_STORE_SETTINGS
+  );
+  assert.ok(visibleMsg.includes('30,00'));
+  assert.ok(visibleMsg.includes('130,00'));
+  assert.ok(visibleMsg.includes('4x de R$'));
+  assert.ok(visibleMsg.includes('Entregar em bombona lacrada'));
+});
+
+test('51. Sales Summary analytics computes 7-day daily orders bar series and best-selling categories donut breakdown accurately', () => {
+  // 1. Auto mode with historical INITIAL_ORDERS on a later date (Nov 25) falls back to latest_active_7d (Nov 03..09)
+  const autoHistorical = buildSalesSummaryAnalytics({
+    orders: INITIAL_ORDERS,
+    products: INITIAL_PRODUCTS,
+    categories: INITIAL_CATEGORIES,
+    windowMode: 'auto',
+    now: new Date(2026, 10, 25, 12, 0, 0),
+  });
+  assert.equal(autoHistorical.daysSeries.length, 7);
+  assert.equal(autoHistorical.hasOrdersInCurrent7Days, false);
+  assert.equal(autoHistorical.resolvedWindowMode, 'latest_active_7d');
+  assert.equal(autoHistorical.periodOrdersCount, 4); // Nov 04, Nov 05, Nov 09 (x2)
+  assert.equal(autoHistorical.peakDay?.ordersCount, 2);
+  assert.ok(autoHistorical.categoryBreakdown.length >= 4);
+  assert.equal(
+    autoHistorical.totalUnitsSold,
+    autoHistorical.categoryBreakdown.reduce((s, c) => s + c.unitsSold, 0)
+  );
+
+  // 2. Explicit rolling_7d mode with a fresh order today anchors to today and counts accurately
+  const todayOrder = {
+    ...INITIAL_ORDERS[0],
+    id: '#LMP-2099',
+    createdAt: new Date(2026, 10, 25, 10, 30, 0).toISOString(),
+    total: 150,
+    subtotal: 150,
+    items: [
+      {
+        productId: 'kit-casa',
+        sku: 'KIT-01',
+        title: 'Combo Casa & Aromas',
+        volumeLabel: 'Combo',
+        unitPrice: 150,
+        quantity: 2,
+        subtotal: 300,
+        kitItems: [
+          {
+            productId: 'prod-casa-1',
+            sku: 'QMP-101',
+            title: 'Água para Lençol Bambu 500mL',
+            volumeLabel: '500mL',
+            quantity: 2,
+          },
+          {
+            productId: 'prod-lav-1',
+            sku: 'QMP-201',
+            title: 'Amaciante Concentrado Carícia 1L',
+            volumeLabel: '1L',
+            quantity: 1,
+          },
+        ],
+      },
+    ],
+  };
+
+  const liveRolling = buildSalesSummaryAnalytics({
+    orders: [todayOrder, ...INITIAL_ORDERS],
+    products: INITIAL_PRODUCTS,
+    categories: INITIAL_CATEGORIES,
+    windowMode: 'auto',
+    categoryScope: 'window_7d',
+    now: new Date(2026, 10, 25, 14, 0, 0),
+  });
+  assert.equal(liveRolling.hasOrdersInCurrent7Days, true);
+  assert.equal(liveRolling.resolvedWindowMode, 'rolling_7d');
+  assert.equal(liveRolling.periodOrdersCount, 1);
+  assert.equal(liveRolling.daysSeries[6].isToday, true);
+  assert.equal(liveRolling.daysSeries[6].ordersCount, 1);
+  // Kit components attributed proportionally across Linha Casa (4 un) and Lavanderia (2 un)
+  assert.equal(liveRolling.totalUnitsSold, 6);
+  assert.equal(liveRolling.categoryBreakdown[0].categoryId, 'cat-casa');
+  assert.equal(liveRolling.categoryBreakdown[0].categoryName, 'Linha Casa');
+  assert.equal(liveRolling.categoryBreakdown[0].unitsSold, 4);
+
+  // 3. Empty orders returns 7 zeroed days and empty category breakdown cleanly
+  const empty = buildSalesSummaryAnalytics({
+    orders: [],
+    products: INITIAL_PRODUCTS,
+    categories: INITIAL_CATEGORIES,
+    now: new Date(2026, 10, 25, 12, 0, 0),
+  });
+  assert.equal(empty.daysSeries.length, 7);
+  assert.equal(empty.periodOrdersCount, 0);
+  assert.equal(empty.categoryBreakdown.length, 0);
+  assert.equal(empty.topCategory, null);
+  assert.equal(empty.topProducts.length, 0);
+
+  // 4. Verify topProducts, deliverySplit, paymentSplit, and dedicated tab RBAC
+  assert.ok(autoHistorical.topProducts.length > 0);
+  assert.equal(autoHistorical.deliverySplit.length, 2);
+  assert.ok(autoHistorical.paymentSplit.length >= 2);
+  assert.equal(ALL_ADMIN_TABS.includes('sales_summary'), true);
+});
+
+
+
 
 
 

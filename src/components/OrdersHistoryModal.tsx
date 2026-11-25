@@ -33,6 +33,8 @@ import {
 } from '../types/commerce';
 import {
   ORDER_STATUS_SEQUENCE,
+  buildStoreTelHref,
+  buildStoreWhatsAppHref,
   buildWhatsAppOrderUrl,
   filterOrdersByCriteria,
   formatCurrency,
@@ -220,7 +222,7 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
     setGuestLookupError(null);
   };
 
-  const cleanPhoneHref = `tel:${settings.whatsappNumber.replace(/^55/, '')}`;
+  const cleanPhoneHref = buildStoreTelHref(settings.whatsappNumber);
 
   // Locked Guest Gate: never reveal store-wide orders when logged out and unverified
   if (orders.length === 0) {
@@ -795,11 +797,10 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
               settings.storeAddress
             );
 
-            const customerArrivedWhatsAppUrl = `https://wa.me/${
-              settings.whatsappNumber
-            }?text=${encodeURIComponent(
+            const customerArrivedWhatsAppUrl = buildStoreWhatsAppHref(
+              settings.whatsappNumber,
               `Olá Limper MT! Estou indo buscar / cheguei na loja (${settings.storeAddress}) para retirar meu pedido *${order.id}* (${order.customerName} — Senha: *${displayPassCode}*).`
-            )}`;
+            );
 
             const destinationAddressLine = order.address
               ? `${order.address.street}, ${order.address.number} — ${order.address.neighborhood}`
@@ -1243,7 +1244,7 @@ export const OrdersHistoryView: React.FC<OrdersHistoryViewProps> = ({
                         className="min-h-[44px] px-4 py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700 text-sm font-medium inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
                       >
                         <Phone className="w-4 h-4 text-zinc-500" />
-                        <span>(65) 3029-6824</span>
+                        <span>{settings.whatsappDisplay}</span>
                       </a>
                     </div>
 

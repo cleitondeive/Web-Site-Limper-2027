@@ -28,6 +28,9 @@ import {
   SecurityEventCategory,
   SecurityEventOutcome,
   SecurityLogDatePreset,
+  SellerQuote,
+  SellerQuoteDiscountType,
+  SellerQuoteItem,
   SiteBackupIntegrityResult,
   SiteBackupPayload,
   SiteBackupSnapshot,
@@ -36,6 +39,7 @@ import {
   CustomerIsolationAuditReport,
   CustomerIsolationScopeCheck,
   StoreSettings,
+  StoreWhatsAppContact,
   VolumeFilterOption,
 } from '../types/commerce';
 import {
@@ -62,6 +66,192 @@ export function formatPhone(phone: string): string {
     return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
   }
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
+}
+
+export function normalizeStoreWhatsAppNumber(input: string): string {
+  let digits = normalizePhone(input || '');
+  if (!digits) return '';
+  // Strip accidental leading trunk zero (e.g. 065999887766)
+  if (digits.startsWith('0') && (digits.length === 11 || digits.length === 12)) {
+    digits = digits.slice(1);
+  }
+  if (digits.length === 10 || digits.length === 11) {
+    return `55${digits}`;
+  }
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
+    return digits;
+  }
+  return '';
+}
+
+export function formatStoreWhatsAppDisplay(input: string): string {
+  const normalized = normalizeStoreWhatsAppNumber(input);
+  if (normalized) {
+    const localDigits = normalized.startsWith('55') ? normalized.slice(2) : normalized;
+    return formatPhone(localDigits);
+  }
+  const rawDigits = normalizePhone(input || '');
+  if (!rawDigits) return '';
+  const stripped =
+    rawDigits.startsWith('55') && rawDigits.length > 11
+      ? rawDigits.slice(2)
+      : rawDigits;
+  return formatPhone(stripped);
+}
+
+export function buildStoreWhatsAppHref(
+  whatsappNumber: string,
+  message?: string
+): string {
+  const cleanPhone = normalizeStoreWhatsAppNumber(whatsappNumber) || '556530296824';
+  if (message && message.trim()) {
+    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+  }
+  return `https://wa.me/${cleanPhone}`;
+}
+
+export function buildStoreTelHref(whatsappNumber: string): string {
+  const cleanPhone = normalizeStoreWhatsAppNumber(whatsappNumber) || '556530296824';
+  return `tel:+${cleanPhone}`;
+}
+
+export function validateStoreWhatsAppInput(phoneInput: string): {
+  valid: boolean;
+  error?: string;
+  normalizedNumber?: string;
+  formattedDisplay?: string;
+} {
+  const normalizedNumber = normalizeStoreWhatsAppNumber(phoneInput);
+  if (!normalizedNumber) {
+    return {
+      valid: false,
+      error:
+        'Informe um telefone WhatsApp brasileiro válido com DDD (10 ou 11 dígitos, ex: (65) 99988-7766).',
+    };
+  }
+  const ddd = Number(normalizedNumber.slice(2, 4));
+  if (!Number.isFinite(ddd) || ddd < 11 || ddd > 99) {
+    return {
+      valid: false,
+      error: 'Informe um DDD válido (ex: 65, 66, 11).',
+    };
+  }
+  return {
+    valid: true,
+    normalizedNumber,
+    formattedDisplay: formatStoreWhatsAppDisplay(normalizedNumber),
+  };
+}
+
+export function ensureStoreWhatsAppContacts(
+  settings: StoreSettings
+): StoreWhatsAppContact[] {
+  const activeNormalized =
+    normalizeStoreWhatsAppNumber(settings.whatsappNumber) || '556530296824';
+  const activeDisplay =
+    formatStoreWhatsAppDisplay(activeNormalized) ||
+    settings.whatsappDisplay ||
+    '(65) 3029-6824';
+
+  const existing = Array.isArray(settings.whatsappContacts)
+    ? settings.whatsappContacts
+        .map((c) => {
+          const norm = normalizeStoreWhatsAppNumber(c.whatsappNumber);
+          if (!norm) return null;
+          return {
+            ...c,
+            label: (c.label || '').trim() || 'WhatsApp Comercial',
+            whatsappNumber: norm,
+            whatsappDisplay: formatStoreWhatsAppDisplay(norm) || c.whatsappDisplay,
+          };
+        })
+        .filter((c): c is StoreWhatsAppContact => Boolean(c))
+    : [];
+
+  if (existing.some((c) => c.whatsappNumber === activeNormalized)) {
+    return existing;
+  }
+
+  return [
+    {
+      id: 'wa-primary',
+      label: settings.activeWhatsAppLabel?.trim() || 'Central Limper MT',
+      whatsappNumber: activeNormalized,
+      whatsappDisplay: activeDisplay,
+      note: 'Recebimento oficial de orçamentos e pedidos',
+      updatedAt: new Date().toISOString(),
+    },
+    ...existing,
+  ];
+}
+
+export function activateStoreWhatsAppNumber(
+  settings: StoreSettings,
+  params: {
+    phoneInput: string;
+    label?: string;
+    note?: string;
+    contactId?: string;
+    saveToDirectory?: boolean;
+  }
+): StoreSettings {
+  const validation = validateStoreWhatsAppInput(params.phoneInput);
+  if (!validation.valid || !validation.normalizedNumber || !validation.formattedDisplay) {
+    return settings;
+  }
+
+  const normalizedNumber = validation.normalizedNumber;
+  const formattedDisplay = validation.formattedDisplay;
+  const cleanLabel =
+    (params.label || '').trim() ||
+    settings.activeWhatsAppLabel?.trim() ||
+    'WhatsApp Comercial';
+  const cleanNote = params.note?.trim() || undefined;
+  const nowIso = new Date().toISOString();
+
+  let nextContacts = ensureStoreWhatsAppContacts(settings);
+
+  if (params.saveToDirectory !== false) {
+    const matchIndex = nextContacts.findIndex(
+      (c) =>
+        (params.contactId && c.id === params.contactId) ||
+        c.whatsappNumber === normalizedNumber
+    );
+
+    if (matchIndex >= 0) {
+      const updatedContact: StoreWhatsAppContact = {
+        ...nextContacts[matchIndex],
+        label: cleanLabel,
+        whatsappNumber: normalizedNumber,
+        whatsappDisplay: formattedDisplay,
+        note: cleanNote ?? nextContacts[matchIndex].note,
+        updatedAt: nowIso,
+      };
+      nextContacts = nextContacts.map((c, idx) =>
+        idx === matchIndex ? updatedContact : c
+      );
+    } else {
+      nextContacts = [
+        {
+          id: `wa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          label: cleanLabel,
+          whatsappNumber: normalizedNumber,
+          whatsappDisplay: formattedDisplay,
+          note: cleanNote,
+          updatedAt: nowIso,
+        },
+        ...nextContacts,
+      ];
+    }
+  }
+
+  return {
+    ...settings,
+    whatsappNumber: normalizedNumber,
+    whatsappDisplay: formattedDisplay,
+    activeWhatsAppLabel: cleanLabel,
+    whatsappContacts: nextContacts,
+  };
 }
 
 export function isProductPriceVisible(product: Product, settings?: StoreSettings): boolean {
@@ -590,7 +780,7 @@ export function buildLogisticsWhatsAppConsultUrl(
   whatsappNumber: string,
   cityName?: string
 ): string {
-  const cleanPhone = normalizePhone(whatsappNumber) || '556530296824';
+  const cleanPhone = normalizeStoreWhatsAppNumber(whatsappNumber) || '556530296824';
   const cityText = cityName?.trim()
     ? `para a cidade de ${cityName.trim()} - MT`
     : 'para outra cidade do estado de Mato Grosso';
@@ -972,7 +1162,7 @@ export function buildWhatsAppOrderUrl(
   order: Order,
   storeAddress?: string
 ): string {
-  const cleanPhone = normalizePhone(whatsappNumber) || '5565999887766';
+  const cleanPhone = normalizeStoreWhatsAppNumber(whatsappNumber) || '5565999887766';
   const message = buildWhatsAppOrderMessage(order, storeAddress);
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
 }
@@ -2063,6 +2253,7 @@ export const SECURITY_CATEGORY_LABELS: Record<SecurityEventCategory, string> = {
   catalog_policy: 'Política de Catálogo',
   user_management: 'Usuários & Permissões',
   site_backup: 'Backup & Restauração',
+  seller_quote: 'Orçamentos do Vendedor',
 };
 
 export const SECURITY_OUTCOME_META: Record<
@@ -2456,6 +2647,8 @@ export function resolveProductBadgeStyle(
 
 export const ALL_ADMIN_TABS: AdminAppTab[] = [
   'kanban',
+  'sales_summary',
+  'seller_area',
   'products',
   'kits',
   'banners',
@@ -2482,6 +2675,20 @@ export const ADMIN_TAB_CATALOG: AdminTabCatalogEntry[] = [
     label: 'Kanban de Separação',
     shortLabel: 'Kanban',
     description: 'Fila de pedidos 15min, lançamento PDV balcão e histórico.',
+    group: 'Operação',
+  },
+  {
+    id: 'sales_summary',
+    label: 'Resumo de Vendas',
+    shortLabel: 'Resumo',
+    description: 'Gráficos de pedidos dos últimos 7 dias, categorias líderes e performance do catálogo.',
+    group: 'Operação',
+  },
+  {
+    id: 'seller_area',
+    label: 'Área do Vendedor',
+    shortLabel: 'Vendedor',
+    description: 'Montar orçamentos comerciais, gerar PDF profissional e enviar no WhatsApp.',
     group: 'Operação',
   },
   {
@@ -2535,9 +2742,9 @@ export const ADMIN_TAB_CATALOG: AdminTabCatalogEntry[] = [
   },
   {
     id: 'settings',
-    label: 'Loja, PIX & Frete',
-    shortLabel: 'Loja & Frete',
-    description: 'Dados da loja física, chave PIX, horários e bairros de entrega.',
+    label: 'WhatsApp, Loja & Frete',
+    shortLabel: 'WhatsApp & Loja',
+    description: 'WhatsApp oficial de orçamentos, chave PIX, endereço e fretes.',
     group: 'Governança',
   },
   {
@@ -2578,10 +2785,12 @@ export const ADMIN_ROLE_META: Record<AdminRoleLevel, AdminRoleMeta> = {
     label: 'Gerente Operacional',
     shortLabel: 'Gerente',
     description:
-      'Acompanha operação, catálogo, campanhas, clientes, configurações e relatórios de segurança.',
+      'Acompanha operação, área do vendedor, catálogo, campanhas, clientes, configurações e relatórios de segurança.',
     badgeClass: 'bg-amber-50 text-amber-900 border-amber-300',
     defaultTabs: [
       'kanban',
+      'sales_summary',
+      'seller_area',
       'products',
       'kits',
       'banners',
@@ -2591,6 +2800,15 @@ export const ADMIN_ROLE_META: Record<AdminRoleLevel, AdminRoleMeta> = {
       'security',
       'settings',
     ],
+  },
+  seller: {
+    level: 'seller',
+    label: 'Vendedor (Área do Vendedor)',
+    shortLabel: 'Vendedor',
+    description:
+      'Acesso focado na Área do Vendedor para montar orçamentos, gerar PDF profissional e enviar para o WhatsApp oficial.',
+    badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-300',
+    defaultTabs: ['seller_area'],
   },
   operator: {
     level: 'operator',
@@ -2607,7 +2825,7 @@ export const ADMIN_ROLE_META: Record<AdminRoleLevel, AdminRoleMeta> = {
     shortLabel: 'Catálogo',
     description:
       'Gerencia produtos, fotos, selos promocionais, kits, banners, cupons e categorias.',
-    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
     defaultTabs: ['products', 'kits', 'banners', 'coupons', 'categories'],
   },
   viewer: {
@@ -2617,7 +2835,7 @@ export const ADMIN_ROLE_META: Record<AdminRoleLevel, AdminRoleMeta> = {
     description:
       'Visualização enxuta dos módulos selecionados (ex: Kanban e Relatórios de Segurança).',
     badgeClass: 'bg-zinc-100 text-zinc-700 border-zinc-300',
-    defaultTabs: ['kanban', 'security'],
+    defaultTabs: ['kanban', 'sales_summary', 'security'],
   },
 };
 
@@ -3478,6 +3696,14 @@ export function validateBannerDraft(draft: {
 export function validateStoreSettingsDraft(
   settings: StoreSettings
 ): CrudValidationResult {
+  const waValidation = validateStoreWhatsAppInput(settings.whatsappNumber);
+  if (!waValidation.valid) {
+    return {
+      valid: false,
+      error: waValidation.error,
+    };
+  }
+
   const numericChecks: Array<[number | undefined, string]> = [
     [settings.freeShippingThreshold, 'Valor para frete grátis'],
     [settings.defaultDeliveryFee, 'Taxa padrão de entrega'],
@@ -4316,6 +4542,844 @@ export function evaluateBackupReminderStatus(
     humanElapsedLabel,
   };
 }
+
+// ============================================================================
+// SELLER AREA (ÁREA DO VENDEDOR) — COMMERCIAL QUOTE & WHATSAPP ENGINE
+// ============================================================================
+
+export function generateNextQuoteNumber(existingQuotes: SellerQuote[]): string {
+  const maxNum = existingQuotes.reduce((acc, q) => {
+    const match = String(q.id || '').match(/(\d+)$/);
+    if (!match) return acc;
+    const n = Number(match[1]);
+    return Number.isFinite(n) && n > acc ? n : acc;
+  }, 1000);
+  return `ORC-${maxNum + 1}`;
+}
+
+export function calculateSellerQuoteTotals(
+  items: SellerQuoteItem[],
+  discountValue = 0,
+  deliveryFee = 0,
+  discountType: SellerQuoteDiscountType = 'percent'
+): {
+  subtotal: number;
+  discountType: SellerQuoteDiscountType;
+  discountValue: number;
+  discountPercent: number;
+  discountAmount: number;
+  deliveryFee: number;
+  total: number;
+  itemCount: number;
+  totalUnits: number;
+} {
+  const safeSubtotal = items.reduce((sum, item) => {
+    const qty = Math.max(0, Number(item.quantity) || 0);
+    const unit = Math.max(0, Number(item.unitPrice) || 0);
+    return sum + qty * unit;
+  }, 0);
+  const roundedSubtotal = Math.round(safeSubtotal * 100) / 100;
+  const resolvedDiscountType: SellerQuoteDiscountType =
+    discountType === 'fixed' ? 'fixed' : 'percent';
+  const rawDiscVal = Math.max(0, Number(discountValue) || 0);
+
+  let discountPercent = 0;
+  let discountAmount = 0;
+  let normalizedDiscountValue = 0;
+
+  if (resolvedDiscountType === 'fixed') {
+    discountAmount = Math.min(
+      roundedSubtotal,
+      Math.round(rawDiscVal * 100) / 100
+    );
+    normalizedDiscountValue = discountAmount;
+    discountPercent =
+      roundedSubtotal > 0
+        ? Math.round((discountAmount / roundedSubtotal) * 10000) / 100
+        : 0;
+  } else {
+    discountPercent = Math.min(100, Math.round(rawDiscVal * 100) / 100);
+    normalizedDiscountValue = discountPercent;
+    discountAmount =
+      Math.round(roundedSubtotal * (discountPercent / 100) * 100) / 100;
+  }
+
+  const safeDeliveryFee = Math.max(0, Math.round((Number(deliveryFee) || 0) * 100) / 100);
+  const total = Math.max(
+    0,
+    Math.round((roundedSubtotal - discountAmount + safeDeliveryFee) * 100) / 100
+  );
+  const itemCount = items.reduce(
+    (sum, item) => sum + Math.max(0, Number(item.quantity) || 0),
+    0
+  );
+
+  return {
+    subtotal: roundedSubtotal,
+    discountType: resolvedDiscountType,
+    discountValue: normalizedDiscountValue,
+    discountPercent,
+    discountAmount,
+    deliveryFee: safeDeliveryFee,
+    total,
+    itemCount,
+    totalUnits: itemCount,
+  };
+}
+
+export function calculateSellerQuoteInstallment(
+  total: number,
+  installmentCount = 1,
+  customInstallmentValue?: number
+): {
+  count: number;
+  unitAmount: number;
+  isCustomValue: boolean;
+  financedTotal: number;
+} {
+  const count = Math.max(1, Math.min(12, Math.round(Number(installmentCount) || 1)));
+  const safeTotal = Math.max(0, Number(total) || 0);
+  const autoAmount =
+    count > 0 ? Math.round((safeTotal / count) * 100) / 100 : safeTotal;
+  const parsedCustom =
+    customInstallmentValue !== undefined && Number.isFinite(customInstallmentValue)
+      ? Math.round(customInstallmentValue * 100) / 100
+      : undefined;
+  const isCustomValue =
+    count > 1 && parsedCustom !== undefined && parsedCustom > 0 && Math.abs(parsedCustom - autoAmount) > 0.009;
+  const unitAmount = isCustomValue && parsedCustom !== undefined ? parsedCustom : autoAmount;
+  const financedTotal = Math.round(unitAmount * count * 100) / 100;
+
+  return {
+    count,
+    unitAmount,
+    isCustomValue,
+    financedTotal,
+  };
+}
+
+export function formatSellerQuotePaymentSummary(
+  quote: Pick<
+    SellerQuote,
+    | 'paymentTerms'
+    | 'installmentCount'
+    | 'installmentValue'
+    | 'installmentInterestFree'
+    | 'paymentNotes'
+    | 'hidePrices'
+    | 'total'
+  >
+): string {
+  const baseMethod = (quote.paymentTerms || 'A combinar').trim();
+  const count = Math.max(1, Math.min(12, Math.round(Number(quote.installmentCount) || 1)));
+  const interestFree = quote.installmentInterestFree !== false;
+  const parts: string[] = [baseMethod];
+
+  if (count > 1) {
+    if (quote.hidePrices) {
+      parts.push(
+        `Em até ${count}x${interestFree ? ' sem juros' : ' (condição negociada)'}`
+      );
+    } else {
+      const calc = calculateSellerQuoteInstallment(
+        quote.total,
+        count,
+        quote.installmentValue
+      );
+      parts.push(
+        `${calc.count}x de ${formatCurrency(calc.unitAmount)}${
+          interestFree && !calc.isCustomValue ? ' sem juros' : ''
+        }`
+      );
+    }
+  }
+
+  if (quote.paymentNotes?.trim()) {
+    parts.push(quote.paymentNotes.trim());
+  }
+
+  return parts.join(' · ');
+}
+
+export function validateSellerQuoteDraft(input: {
+  customerName: string;
+  items: SellerQuoteItem[];
+  discountPercent?: number;
+  discountType?: SellerQuoteDiscountType;
+  discountValue?: number;
+  deliveryFee?: number;
+  installmentCount?: number;
+}): { valid: boolean; error?: string } {
+  const name = String(input.customerName || '').trim();
+  if (name.length < 2) {
+    return {
+      valid: false,
+      error: 'Informe o nome do cliente ou empresa para gerar o orçamento.',
+    };
+  }
+  if (!Array.isArray(input.items) || input.items.length === 0) {
+    return {
+      valid: false,
+      error: 'Adicione pelo menos um produto ou item ao orçamento.',
+    };
+  }
+  for (const item of input.items) {
+    if (!String(item.title || '').trim()) {
+      return { valid: false, error: 'Todos os itens precisam ter uma descrição válida.' };
+    }
+    if (!Number.isFinite(item.quantity) || item.quantity <= 0) {
+      return {
+        valid: false,
+        error: `A quantidade de "${item.title}" deve ser maior que zero.`,
+      };
+    }
+    if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) {
+      return {
+        valid: false,
+        error: `O valor unitário de "${item.title}" não pode ser negativo.`,
+      };
+    }
+  }
+  const discType: SellerQuoteDiscountType =
+    input.discountType === 'fixed' ? 'fixed' : 'percent';
+  const discVal = Number(
+    input.discountValue !== undefined ? input.discountValue : input.discountPercent ?? 0
+  );
+  if (discType === 'fixed') {
+    if (!Number.isFinite(discVal) || discVal < 0) {
+      return { valid: false, error: 'O desconto em reais (R$) não pode ser negativo.' };
+    }
+  } else {
+    if (!Number.isFinite(discVal) || discVal < 0 || discVal > 100) {
+      return { valid: false, error: 'O desconto comercial deve estar entre 0% e 100%.' };
+    }
+  }
+  const fee = Number(input.deliveryFee ?? 0);
+  if (!Number.isFinite(fee) || fee < 0) {
+    return { valid: false, error: 'O valor do frete não pode ser negativo.' };
+  }
+  if (input.installmentCount !== undefined) {
+    const inst = Number(input.installmentCount);
+    if (!Number.isFinite(inst) || inst < 1 || inst > 12) {
+      return { valid: false, error: 'A quantidade de parcelas deve ficar entre 1x e 12x.' };
+    }
+  }
+  return { valid: true };
+}
+
+export function buildSellerQuoteWhatsAppMessage(
+  quote: SellerQuote,
+  settings?: StoreSettings
+): string {
+  const storeName = settings?.storeName || 'Limper MT';
+  const validBr = quote.validUntilDate
+    ? formatBrDateFromYmd(quote.validUntilDate)
+    : '';
+  const hidePrices = Boolean(quote.hidePrices);
+  const paymentSummary = formatSellerQuotePaymentSummary(quote);
+
+  const lines: string[] = [
+    `📋 *ORÇAMENTO COMERCIAL #${quote.id} — ${storeName.toUpperCase()}*`,
+    `👤 *Vendedor:* ${quote.sellerName}${
+      quote.sellerUsername ? ` (@${quote.sellerUsername})` : ''
+    }`,
+  ];
+
+  if (hidePrices) {
+    lines.push('🔒 *Modalidade:* Orçamento Sob Consulta (valores ocultos)');
+  }
+
+  lines.push('');
+  lines.push(`🏢 *Cliente:* ${quote.customerName}`);
+
+  if (quote.customerCompany) {
+    lines.push(`🏷️ *Empresa / Condomínio:* ${quote.customerCompany}`);
+  }
+  if (quote.customerDocument) {
+    lines.push(`🪪 *CPF / CNPJ:* ${quote.customerDocument}`);
+  }
+  if (quote.customerPhone) {
+    lines.push(`📱 *Contato do Cliente:* ${formatPhone(quote.customerPhone)}`);
+  }
+  if (quote.customerCity) {
+    lines.push(`📍 *Cidade / Bairro:* ${quote.customerCity}`);
+  }
+
+  lines.push('');
+  lines.push('🛒 *ITENS DO ORÇAMENTO:*');
+  quote.items.forEach((item, idx) => {
+    const lineTotal = item.quantity * item.unitPrice;
+    const skuTag = item.sku ? ` [${item.sku}]` : '';
+    const unitTag = item.volumeLabel ? ` (${item.volumeLabel})` : '';
+    if (hidePrices) {
+      lines.push(
+        `${idx + 1}. ${item.quantity}x *${item.title}*${unitTag}${skuTag} — *Sob Consulta*`
+      );
+    } else {
+      lines.push(
+        `${idx + 1}. ${item.quantity}x *${item.title}*${unitTag}${skuTag} — ${formatCurrency(
+          item.unitPrice
+        )} un. = *${formatCurrency(lineTotal)}*`
+      );
+    }
+    if (item.itemNote?.trim()) {
+      lines.push(`   ↳ _Obs.: ${item.itemNote.trim()}_`);
+    }
+  });
+
+  lines.push('');
+  if (hidePrices) {
+    lines.push(
+      quote.deliveryType === 'pickup'
+        ? '🏪 *Modalidade:* Retirada na Loja'
+        : '🚚 *Modalidade:* Entrega Delivery Limper MT'
+    );
+    lines.push('💰 *Valores:* *Sob Consulta (solicite a tabela fechada com o vendedor)*');
+  } else {
+    lines.push(`💵 *Subtotal:* ${formatCurrency(quote.subtotal)}`);
+    if (quote.discountAmount > 0) {
+      const discLabel =
+        quote.discountType === 'fixed'
+          ? `Desconto (${formatCurrency(quote.discountAmount)} · ${quote.discountPercent}%)`
+          : `Desconto (${quote.discountPercent}%)`;
+      lines.push(`🏷️ *${discLabel}:* -${formatCurrency(quote.discountAmount)}`);
+    }
+    lines.push(
+      quote.deliveryType === 'pickup'
+        ? `🏪 *Modalidade:* Retirada na Loja (Sem frete)`
+        : `🚚 *Entrega / Frete:* ${
+            quote.deliveryFee > 0 ? formatCurrency(quote.deliveryFee) : 'A combinar / Grátis'
+          }`
+    );
+    lines.push(`✅ *TOTAL DO ORÇAMENTO:* *${formatCurrency(quote.total)}*`);
+  }
+
+  lines.push(`💳 *Pagamento:* ${paymentSummary}`);
+  if (validBr) {
+    lines.push(`📅 *Validade da Proposta:* até ${validBr}`);
+  }
+  if (quote.notes) {
+    lines.push(`📝 *Observações:* ${quote.notes}`);
+  }
+  lines.push('');
+  lines.push(
+    `_PDF oficial do orçamento #${quote.id} gerado pela Área do Vendedor ${storeName}._`
+  );
+
+  return lines.join('\n');
+}
+
+export function buildSellerQuoteWhatsAppUrl(
+  targetWhatsappNumber: string,
+  quote: SellerQuote,
+  settings?: StoreSettings
+): string {
+  const normalizedTarget =
+    normalizeStoreWhatsAppNumber(targetWhatsappNumber) ||
+    normalizeStoreWhatsAppNumber(settings?.whatsappNumber || '') ||
+    '556530296824';
+  const msg = buildSellerQuoteWhatsAppMessage(quote, settings);
+  return `https://wa.me/${normalizedTarget}?text=${encodeURIComponent(msg)}`;
+}
+
+// ============================================================================
+// ADMIN SALES SUMMARY ANALYTICS (LAST 7 DAYS ORDERS + TOP CATEGORIES DONUT)
+// ============================================================================
+
+export type SalesWindowMode = 'auto' | 'rolling_7d' | 'latest_active_7d';
+
+export interface SalesDayPoint {
+  dateKey: string; // YYYY-MM-DD (local date)
+  dayLabel: string; // Dom, Seg, Ter...
+  shortDate: string; // DD/MM
+  fullDateLabel: string; // Ex: "Qua, 25/11"
+  ordersCount: number;
+  revenue: number;
+  unitsCount: number;
+  isToday: boolean;
+}
+
+export interface CategorySalesSlice {
+  categoryId: string;
+  categoryName: string;
+  unitsSold: number;
+  revenue: number;
+  ordersCount: number;
+  shareUnitsPct: number;
+  shareRevenuePct: number;
+  color: string;
+}
+
+export interface TopProductSalesEntry {
+  productKey: string;
+  sku: string;
+  title: string;
+  categoryName: string;
+  unitsSold: number;
+  revenue: number;
+  ordersCount: number;
+}
+
+export interface ChannelSplitEntry {
+  key: string;
+  label: string;
+  ordersCount: number;
+  revenue: number;
+  sharePct: number;
+}
+
+export interface SalesSummaryAnalytics {
+  daysSeries: SalesDayPoint[];
+  resolvedWindowMode: 'rolling_7d' | 'latest_active_7d';
+  windowStartLabel: string;
+  windowEndLabel: string;
+  hasOrdersInCurrent7Days: boolean;
+  periodOrdersCount: number;
+  periodRevenue: number;
+  periodUnitsCount: number;
+  periodAvgTicket: number;
+  allTimeOrdersCount: number;
+  allTimeRevenue: number;
+  peakDay: SalesDayPoint | null;
+  categoryBreakdown: CategorySalesSlice[];
+  totalUnitsSold: number;
+  totalCategoryRevenue: number;
+  topCategory: CategorySalesSlice | null;
+  topProducts: TopProductSalesEntry[];
+  deliverySplit: ChannelSplitEntry[];
+  paymentSplit: ChannelSplitEntry[];
+}
+
+export const SALES_CATEGORY_CHART_PALETTE: readonly string[] = [
+  '#18181B', // Charcoal
+  '#EAB308', // Limper Gold
+  '#059669', // Emerald
+  '#2563EB', // Cobalt
+  '#DC2626', // Crimson
+  '#7C3AED', // Violet
+  '#EA580C', // Burnt Orange
+  '#0891B2', // Cyan Teal
+];
+
+const PT_BR_WEEKDAYS_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function formatLocalDateYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function formatShortBrDate(date: Date): string {
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  return `${d}/${m}`;
+}
+
+function parseValidOrderDate(iso: string): Date | null {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function buildSalesSummaryAnalytics(params: {
+  orders: readonly Order[];
+  products: readonly Product[];
+  categories: readonly Category[];
+  deletedProducts?: readonly DeletedProductEntry[];
+  windowMode?: SalesWindowMode;
+  categoryScope?: 'all' | 'window_7d';
+  now?: Date;
+}): SalesSummaryAnalytics {
+  const {
+    orders,
+    products,
+    categories,
+    deletedProducts = [],
+    windowMode = 'auto',
+    categoryScope = 'all',
+    now = new Date(),
+  } = params;
+
+  const todayMidnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+  const todayKey = formatLocalDateYmd(todayMidnight);
+
+  const rollingKeys = new Set<string>();
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = new Date(todayMidnight);
+    d.setDate(todayMidnight.getDate() - offset);
+    rollingKeys.add(formatLocalDateYmd(d));
+  }
+
+  let latestOrderDate: Date | null = null;
+  let hasOrdersInCurrent7Days = false;
+
+  for (const order of orders) {
+    const dt = parseValidOrderDate(order.createdAt);
+    if (!dt) continue;
+    const key = formatLocalDateYmd(dt);
+    if (rollingKeys.has(key)) {
+      hasOrdersInCurrent7Days = true;
+    }
+    if (!latestOrderDate || dt.getTime() > latestOrderDate.getTime()) {
+      latestOrderDate = dt;
+    }
+  }
+
+  const resolvedWindowMode: 'rolling_7d' | 'latest_active_7d' =
+    windowMode === 'rolling_7d'
+      ? 'rolling_7d'
+      : windowMode === 'latest_active_7d'
+        ? latestOrderDate
+          ? 'latest_active_7d'
+          : 'rolling_7d'
+        : hasOrdersInCurrent7Days || !latestOrderDate
+          ? 'rolling_7d'
+          : 'latest_active_7d';
+
+  const anchorDate =
+    resolvedWindowMode === 'latest_active_7d' && latestOrderDate
+      ? new Date(
+          latestOrderDate.getFullYear(),
+          latestOrderDate.getMonth(),
+          latestOrderDate.getDate()
+        )
+      : todayMidnight;
+
+  const dayMap = new Map<string, SalesDayPoint>();
+  const daysSeries: SalesDayPoint[] = [];
+
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = new Date(anchorDate);
+    d.setDate(anchorDate.getDate() - offset);
+    const dateKey = formatLocalDateYmd(d);
+    const dayLabel = PT_BR_WEEKDAYS_SHORT[d.getDay()] || '';
+    const shortDate = formatShortBrDate(d);
+    const isToday = dateKey === todayKey;
+    const point: SalesDayPoint = {
+      dateKey,
+      dayLabel,
+      shortDate,
+      fullDateLabel: isToday ? `Hoje, ${shortDate}` : `${dayLabel}, ${shortDate}`,
+      ordersCount: 0,
+      revenue: 0,
+      unitsCount: 0,
+      isToday,
+    };
+    dayMap.set(dateKey, point);
+    daysSeries.push(point);
+  }
+
+  const windowOrders: Order[] = [];
+  for (const order of orders) {
+    const dt = parseValidOrderDate(order.createdAt);
+    if (!dt) continue;
+    const key = formatLocalDateYmd(dt);
+    const bucket = dayMap.get(key);
+    if (!bucket) continue;
+    windowOrders.push(order);
+    bucket.ordersCount += 1;
+    bucket.revenue = Math.round((bucket.revenue + (Number(order.total) || 0)) * 100) / 100;
+    const orderUnits = order.items.reduce(
+      (sum, it) => sum + Math.max(0, Number(it.quantity) || 0),
+      0
+    );
+    bucket.unitsCount += orderUnits;
+  }
+
+  const periodOrdersCount = daysSeries.reduce((sum, d) => sum + d.ordersCount, 0);
+  const periodRevenue =
+    Math.round(daysSeries.reduce((sum, d) => sum + d.revenue, 0) * 100) / 100;
+  const periodUnitsCount = daysSeries.reduce((sum, d) => sum + d.unitsCount, 0);
+  const periodAvgTicket =
+    periodOrdersCount > 0
+      ? Math.round((periodRevenue / periodOrdersCount) * 100) / 100
+      : 0;
+
+  let peakDay: SalesDayPoint | null = null;
+  for (const point of daysSeries) {
+    if (point.ordersCount <= 0) continue;
+    if (
+      !peakDay ||
+      point.ordersCount > peakDay.ordersCount ||
+      (point.ordersCount === peakDay.ordersCount && point.revenue > peakDay.revenue)
+    ) {
+      peakDay = point;
+    }
+  }
+
+  const productCategoryById = new Map<string, string>();
+  const productCategoryBySku = new Map<string, string>();
+  const registerProduct = (p: Product) => {
+    if (p.id && p.categoryId) {
+      productCategoryById.set(p.id, p.categoryId);
+    }
+    if (p.sku && p.categoryId) {
+      productCategoryBySku.set(p.sku.trim().toUpperCase(), p.categoryId);
+    }
+  };
+  deletedProducts.forEach((entry) => registerProduct(entry.product));
+  products.forEach(registerProduct);
+
+  const categoryNameById = new Map<string, string>();
+  categories.forEach((cat) => {
+    categoryNameById.set(cat.id, cat.name);
+  });
+
+  const resolveCategoryId = (productId: string, sku?: string): string => {
+    const byId = productCategoryById.get(productId);
+    if (byId) return byId;
+    if (sku) {
+      const bySku = productCategoryBySku.get(sku.trim().toUpperCase());
+      if (bySku) return bySku;
+    }
+    return 'other';
+  };
+
+  const categoryOrdersSource =
+    categoryScope === 'window_7d' ? windowOrders : orders;
+
+  const categoryAgg = new Map<
+    string,
+    {
+      categoryId: string;
+      categoryName: string;
+      unitsSold: number;
+      revenue: number;
+      orderIds: Set<string>;
+    }
+  >();
+
+  const creditCategory = (
+    catId: string,
+    units: number,
+    rev: number,
+    orderId: string
+  ) => {
+    const safeUnits = Math.max(0, units);
+    const safeRev = Math.max(0, rev);
+    if (safeUnits === 0 && safeRev === 0) return;
+    const existing = categoryAgg.get(catId);
+    if (existing) {
+      existing.unitsSold += safeUnits;
+      existing.revenue = Math.round((existing.revenue + safeRev) * 100) / 100;
+      existing.orderIds.add(orderId);
+      return;
+    }
+    categoryAgg.set(catId, {
+      categoryId: catId,
+      categoryName: categoryNameById.get(catId) || 'Outros / Avulsos',
+      unitsSold: safeUnits,
+      revenue: Math.round(safeRev * 100) / 100,
+      orderIds: new Set([orderId]),
+    });
+  };
+
+  for (const order of categoryOrdersSource) {
+    for (const item of order.items) {
+      const itemQty = Math.max(0, Number(item.quantity) || 0);
+      const itemSubtotal = Math.max(
+        0,
+        Number(item.subtotal) || (Number(item.unitPrice) || 0) * itemQty
+      );
+
+      if (item.kitItems && item.kitItems.length > 0 && itemQty > 0) {
+        const totalKitUnits = item.kitItems.reduce(
+          (acc, k) => acc + Math.max(1, Number(k.quantity) || 1),
+          0
+        );
+        for (const comp of item.kitItems) {
+          const compQty = Math.max(1, Number(comp.quantity) || 1);
+          const attributedUnits = compQty * itemQty;
+          const attributedRev =
+            totalKitUnits > 0
+              ? itemSubtotal * (compQty / totalKitUnits)
+              : 0;
+          const catId = resolveCategoryId(comp.productId, comp.sku);
+          creditCategory(catId, attributedUnits, attributedRev, order.id);
+        }
+      } else {
+        const catId = resolveCategoryId(item.productId, item.sku);
+        creditCategory(catId, itemQty, itemSubtotal, order.id);
+      }
+    }
+  }
+
+  const sortedCategories = Array.from(categoryAgg.values()).sort((a, b) => {
+    if (b.unitsSold !== a.unitsSold) return b.unitsSold - a.unitsSold;
+    return b.revenue - a.revenue;
+  });
+
+  const totalUnitsSold = sortedCategories.reduce((sum, c) => sum + c.unitsSold, 0);
+  const totalCategoryRevenue =
+    Math.round(sortedCategories.reduce((sum, c) => sum + c.revenue, 0) * 100) / 100;
+
+  const categoryBreakdown: CategorySalesSlice[] = sortedCategories.map((c, idx) => ({
+    categoryId: c.categoryId,
+    categoryName: c.categoryName,
+    unitsSold: c.unitsSold,
+    revenue: c.revenue,
+    ordersCount: c.orderIds.size,
+    shareUnitsPct:
+      totalUnitsSold > 0 ? Math.round((c.unitsSold / totalUnitsSold) * 1000) / 10 : 0,
+    shareRevenuePct:
+      totalCategoryRevenue > 0
+        ? Math.round((c.revenue / totalCategoryRevenue) * 1000) / 10
+        : 0,
+    color: SALES_CATEGORY_CHART_PALETTE[idx % SALES_CATEGORY_CHART_PALETTE.length],
+  }));
+
+  // Top-selling products breakdown within selected scope
+  const productAgg = new Map<
+    string,
+    {
+      productKey: string;
+      sku: string;
+      title: string;
+      categoryName: string;
+      unitsSold: number;
+      revenue: number;
+      orderIds: Set<string>;
+    }
+  >();
+
+  for (const order of categoryOrdersSource) {
+    for (const item of order.items) {
+      const qty = Math.max(0, Number(item.quantity) || 0);
+      if (qty === 0) continue;
+      const rev = Math.max(
+        0,
+        Number(item.subtotal) || (Number(item.unitPrice) || 0) * qty
+      );
+      const key = item.productId || item.sku || item.title;
+      const catId = resolveCategoryId(item.productId, item.sku);
+      const categoryName = categoryNameById.get(catId) || 'Outros / Avulsos';
+      const existing = productAgg.get(key);
+      if (existing) {
+        existing.unitsSold += qty;
+        existing.revenue = Math.round((existing.revenue + rev) * 100) / 100;
+        existing.orderIds.add(order.id);
+      } else {
+        productAgg.set(key, {
+          productKey: key,
+          sku: item.sku || 'S/SKU',
+          title: item.title,
+          categoryName,
+          unitsSold: qty,
+          revenue: Math.round(rev * 100) / 100,
+          orderIds: new Set([order.id]),
+        });
+      }
+    }
+  }
+
+  const topProducts: TopProductSalesEntry[] = Array.from(productAgg.values())
+    .sort((a, b) => {
+      if (b.unitsSold !== a.unitsSold) return b.unitsSold - a.unitsSold;
+      return b.revenue - a.revenue;
+    })
+    .slice(0, 6)
+    .map((p) => ({
+      productKey: p.productKey,
+      sku: p.sku,
+      title: p.title,
+      categoryName: p.categoryName,
+      unitsSold: p.unitsSold,
+      revenue: p.revenue,
+      ordersCount: p.orderIds.size,
+    }));
+
+  // Delivery & Payment channel split within selected scope
+  const scopeOrdersTotal = categoryOrdersSource.length;
+  const deliveryMap = new Map<string, { label: string; count: number; revenue: number }>([
+    ['pickup', { label: 'Retirada Balcão 15min', count: 0, revenue: 0 }],
+    ['delivery', { label: 'Entrega Delivery', count: 0, revenue: 0 }],
+  ]);
+
+  const paymentLabels: Record<PaymentMethod, string> = {
+    pix: 'PIX',
+    card: 'Cartão',
+    cash: 'Dinheiro',
+    quote: 'Orçamento WhatsApp',
+  };
+  const paymentMap = new Map<string, { label: string; count: number; revenue: number }>();
+
+  for (const order of categoryOrdersSource) {
+    const rev = Math.max(0, Number(order.total) || 0);
+    const delKey = order.deliveryType === 'pickup' ? 'pickup' : 'delivery';
+    const delEntry = deliveryMap.get(delKey)!;
+    delEntry.count += 1;
+    delEntry.revenue = Math.round((delEntry.revenue + rev) * 100) / 100;
+
+    const payKey = order.paymentMethod || 'pix';
+    const payEntry = paymentMap.get(payKey) || {
+      label: paymentLabels[payKey] || payKey,
+      count: 0,
+      revenue: 0,
+    };
+    payEntry.count += 1;
+    payEntry.revenue = Math.round((payEntry.revenue + rev) * 100) / 100;
+    paymentMap.set(payKey, payEntry);
+  }
+
+  const deliverySplit: ChannelSplitEntry[] = Array.from(deliveryMap.entries())
+    .map(([key, val]) => ({
+      key,
+      label: val.label,
+      ordersCount: val.count,
+      revenue: val.revenue,
+      sharePct:
+        scopeOrdersTotal > 0
+          ? Math.round((val.count / scopeOrdersTotal) * 1000) / 10
+          : 0,
+    }))
+    .sort((a, b) => b.ordersCount - a.ordersCount);
+
+  const paymentSplit: ChannelSplitEntry[] = Array.from(paymentMap.entries())
+    .map(([key, val]) => ({
+      key,
+      label: val.label,
+      ordersCount: val.count,
+      revenue: val.revenue,
+      sharePct:
+        scopeOrdersTotal > 0
+          ? Math.round((val.count / scopeOrdersTotal) * 1000) / 10
+          : 0,
+    }))
+    .sort((a, b) => b.ordersCount - a.ordersCount);
+
+  const allTimeOrdersCount = orders.length;
+  const allTimeRevenue =
+    Math.round(
+      orders.reduce((sum, o) => sum + (Number(o.total) || 0), 0) * 100
+    ) / 100;
+
+  return {
+    daysSeries,
+    resolvedWindowMode,
+    windowStartLabel: daysSeries[0]?.shortDate || '',
+    windowEndLabel: daysSeries[daysSeries.length - 1]?.shortDate || '',
+    hasOrdersInCurrent7Days,
+    periodOrdersCount,
+    periodRevenue,
+    periodUnitsCount,
+    periodAvgTicket,
+    allTimeOrdersCount,
+    allTimeRevenue,
+    peakDay,
+    categoryBreakdown,
+    totalUnitsSold,
+    totalCategoryRevenue,
+    topCategory: categoryBreakdown[0] || null,
+    topProducts,
+    deliverySplit,
+    paymentSplit,
+  };
+}
+
 
 
 

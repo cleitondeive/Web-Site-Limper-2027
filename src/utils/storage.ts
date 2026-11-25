@@ -11,6 +11,8 @@ import {
   PromoCoupon,
   PromoKit,
   SecurityAuditEvent,
+  SellerCustomProduct,
+  SellerQuote,
   SiteBackupSnapshot,
   StoreSettings,
 } from '../types/commerce';
@@ -18,6 +20,9 @@ import {
   DEFAULT_ADMIN_USERS,
   DEFAULT_BACKUP_REMINDER_CONFIG,
   DEFAULT_BACKUP_SCHEDULE_CONFIG,
+  ensureStoreWhatsAppContacts,
+  formatStoreWhatsAppDisplay,
+  normalizeStoreWhatsAppNumber,
   sortAndDedupeScheduleTimes,
 } from './commerce';
 import {
@@ -46,6 +51,8 @@ const STORAGE_KEYS = {
   SITE_BACKUPS: 'limper_mt_site_backups_v1',
   BACKUP_SCHEDULE: 'limper_mt_backup_schedule_v1',
   DELETED_PRODUCTS: 'limper_mt_deleted_products_v1',
+  SELLER_QUOTES: 'limper_mt_seller_quotes_v1',
+  SELLER_CUSTOM_PRODUCTS: 'limper_mt_seller_custom_products_v1',
 };
 
 const IDB_NAME = 'LimperMT_Database';
@@ -179,15 +186,50 @@ export const storageService = {
   saveDeletedProducts: (entries: DeletedProductEntry[]) =>
     saveToStorage(STORAGE_KEYS.DELETED_PRODUCTS, entries),
 
+  getSellerQuotes: (): SellerQuote[] => {
+    const loaded = loadFromStorage<SellerQuote[]>(STORAGE_KEYS.SELLER_QUOTES, []);
+    return Array.isArray(loaded) ? loaded : [];
+  },
+  saveSellerQuotes: (quotes: SellerQuote[]) =>
+    saveToStorage(STORAGE_KEYS.SELLER_QUOTES, quotes),
+
+  getSellerCustomProducts: (): SellerCustomProduct[] => {
+    const loaded = loadFromStorage<SellerCustomProduct[]>(
+      STORAGE_KEYS.SELLER_CUSTOM_PRODUCTS,
+      []
+    );
+    return Array.isArray(loaded) ? loaded : [];
+  },
+  saveSellerCustomProducts: (items: SellerCustomProduct[]) =>
+    saveToStorage(STORAGE_KEYS.SELLER_CUSTOM_PRODUCTS, items),
+
   getOrders: (): Order[] =>
     loadFromStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
   saveOrders: (orders: Order[]) =>
     saveToStorage(STORAGE_KEYS.ORDERS, orders),
 
-  getSettings: (): StoreSettings => ({
-    ...INITIAL_STORE_SETTINGS,
-    ...loadFromStorage<StoreSettings>(STORAGE_KEYS.SETTINGS, INITIAL_STORE_SETTINGS),
-  }),
+  getSettings: (): StoreSettings => {
+    const merged: StoreSettings = {
+      ...INITIAL_STORE_SETTINGS,
+      ...loadFromStorage<StoreSettings>(STORAGE_KEYS.SETTINGS, INITIAL_STORE_SETTINGS),
+    };
+    const normalizedWa =
+      normalizeStoreWhatsAppNumber(merged.whatsappNumber) ||
+      INITIAL_STORE_SETTINGS.whatsappNumber;
+    const formattedDisplay =
+      formatStoreWhatsAppDisplay(normalizedWa) ||
+      merged.whatsappDisplay ||
+      INITIAL_STORE_SETTINGS.whatsappDisplay;
+    const normalizedSettings: StoreSettings = {
+      ...merged,
+      whatsappNumber: normalizedWa,
+      whatsappDisplay: formattedDisplay,
+    };
+    return {
+      ...normalizedSettings,
+      whatsappContacts: ensureStoreWhatsAppContacts(normalizedSettings),
+    };
+  },
   saveSettings: (settings: StoreSettings) =>
     saveToStorage(STORAGE_KEYS.SETTINGS, settings),
 

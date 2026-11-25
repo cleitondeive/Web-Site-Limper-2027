@@ -228,10 +228,21 @@ export interface NeighborhoodFee {
   fee: number;
 }
 
+export interface StoreWhatsAppContact {
+  id: string;
+  label: string; // Ex: "Balcão Principal", "Vendedor Lucas", "Plantão Vendas"
+  whatsappNumber: string; // Normalizado com DDI 55: "5565999887766"
+  whatsappDisplay: string; // Exibição formatada: "(65) 99988-7766"
+  note?: string;
+  updatedAt: string;
+}
+
 export interface StoreSettings {
   storeName: string;
   whatsappNumber: string; // ex: "5565999887766"
   whatsappDisplay: string; // ex: "(65) 99988-7766"
+  activeWhatsAppLabel?: string; // Nome/identificação do canal ou vendedor ativo
+  whatsappContacts?: StoreWhatsAppContact[]; // Agenda de números para troca rápida
   pixKey: string;
   pixKeyType: 'CNPJ' | 'Celular' | 'E-mail' | 'Aleatória';
   pixBeneficiary: string;
@@ -302,6 +313,8 @@ export interface PromoBanner {
 
 export type AdminAppTab =
   | 'kanban'
+  | 'sales_summary'
+  | 'seller_area'
   | 'products'
   | 'kits'
   | 'banners'
@@ -315,6 +328,7 @@ export type AdminAppTab =
 export type AdminRoleLevel =
   | 'master'
   | 'manager'
+  | 'seller'
   | 'operator'
   | 'catalog'
   | 'viewer';
@@ -335,12 +349,81 @@ export interface AdminUser {
   lastLoginAt?: string;
 }
 
+export type SellerQuoteStatus = 'draft' | 'pdf_generated' | 'sent_whatsapp';
+
+export type SellerQuoteDiscountType = 'percent' | 'fixed';
+
+export interface SellerQuoteItem {
+  id: string;
+  productId?: string;
+  sku?: string;
+  title: string;
+  volumeLabel?: string;
+  imageUrl?: string;
+  catalogPrice?: number;
+  itemNote?: string;
+  quantity: number;
+  unitPrice: number;
+  subtotal: number;
+  isCustom?: boolean;
+}
+
+export interface SellerQuote {
+  id: string; // ex: "ORC-1001"
+  createdAt: string;
+  validUntilDate: string; // YYYY-MM-DD
+  sellerId?: string;
+  sellerName: string;
+  sellerUsername?: string;
+  customerName: string;
+  customerCompany?: string;
+  customerDocument?: string;
+  customerPhone: string;
+  customerCity?: string;
+  deliveryType: DeliveryType;
+  paymentTerms: string;
+  installmentCount?: number;
+  installmentValue?: number;
+  installmentInterestFree?: boolean;
+  paymentNotes?: string;
+  hidePrices?: boolean;
+  items: SellerQuoteItem[];
+  subtotal: number;
+  discountType?: SellerQuoteDiscountType;
+  discountValue?: number;
+  discountPercent: number;
+  discountAmount: number;
+  deliveryFee: number;
+  total: number;
+  notes?: string;
+  targetWhatsappNumber: string;
+  targetWhatsappDisplay: string;
+  status: SellerQuoteStatus;
+  pdfGeneratedCount: number;
+  whatsappSentCount: number;
+  lastSentAt?: string;
+}
+
+export interface SellerCustomProduct {
+  id: string;
+  sku: string;
+  title: string;
+  volumeLabel?: string;
+  price: number;
+  imageUrl?: string;
+  defaultNote?: string;
+  createdAt: string;
+  createdBy?: string;
+  createdByUsername?: string;
+}
+
 export type SecurityEventCategory =
   | 'tracking_access'
   | 'customer_auth'
   | 'admin_auth'
   | 'user_management'
   | 'site_backup'
+  | 'seller_quote'
   | 'order_security'
   | 'catalog_policy';
 
@@ -427,6 +510,8 @@ export interface SiteBackupPayload {
   settings: StoreSettings;
   adminUsers: AdminUser[];
   securityLogs?: SecurityAuditEvent[];
+  sellerQuotes?: SellerQuote[];
+  sellerCustomProducts?: SellerCustomProduct[];
 }
 
 export interface SiteBackupSummary {

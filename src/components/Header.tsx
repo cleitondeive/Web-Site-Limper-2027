@@ -23,7 +23,9 @@ import {
 } from 'lucide-react';
 import { Category, CustomerProfile, Product } from '../types/commerce';
 import {
+  buildStoreTelHref,
   formatCurrency,
+  formatStoreWhatsAppDisplay,
   getDiscountPercentage,
   getEffectivePrice,
   isCustomerLoggedIn,
@@ -47,6 +49,8 @@ interface HeaderProps {
   ordersCount?: number;
   customerProfile: CustomerProfile;
   hideAllPrices?: boolean;
+  storeWhatsappNumber?: string;
+  storeWhatsappDisplay?: string;
   onSearchChange: (q: string) => void;
   onSelectProduct: (product: Product) => void;
   onAddToCart: (product: Product) => void;
@@ -83,6 +87,8 @@ export const Header: React.FC<HeaderProps> = ({
   isCartQuoteOnly = false,
   customerProfile,
   hideAllPrices,
+  storeWhatsappNumber = '556530296824',
+  storeWhatsappDisplay,
   onSearchChange,
   onSelectProduct,
   onAddToCart,
@@ -200,11 +206,15 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className="flex items-center gap-2.5 sm:gap-3.5 text-zinc-300 shrink-0">
             <a
-              href="tel:6530296824"
+              href={buildStoreTelHref(storeWhatsappNumber)}
               className="inline-flex items-center gap-1 text-white hover:text-[#FFBE00] font-mono font-bold transition-colors"
             >
               <Phone className="w-3 h-3 text-[#FFBE00]" />
-              <span className="hidden xs:inline sm:inline">(65) 3029-6824</span>
+              <span className="hidden xs:inline sm:inline">
+                {storeWhatsappDisplay ||
+                  formatStoreWhatsAppDisplay(storeWhatsappNumber) ||
+                  '(65) 3029-6824'}
+              </span>
             </a>
             <button
               type="button"

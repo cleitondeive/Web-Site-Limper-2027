@@ -756,6 +756,7 @@ export const AdminSecurityTab: React.FC<AdminSecurityTabProps> = ({
               className="w-full px-3 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-xs font-bold text-zinc-800 focus:bg-white focus:border-[#FFBE00] focus:outline-none cursor-pointer"
             >
               <option value="all">Todas as categorias</option>
+              <option value="seller_quote">Orçamentos do Vendedor</option>
               <option value="site_backup">Backup & Restauração</option>
               <option value="user_management">Usuários & Permissões</option>
               <option value="admin_auth">Acesso Administrativo</option>
