@@ -181,6 +181,13 @@ import {
   ProductTrashPanel,
 } from './ProductTrashPanel';
 import { DEFAULT_CUSTOMER_PROFILE, storageService } from '../utils/storage';
+import {
+  apiClient,
+  clearAdminAuthToken,
+  type AdminAuthStatusResponse,
+  type AdminBootstrapResponse,
+  type ServerDatabaseStatus,
+} from '../utils/api';
 
 interface AdminDashboardProps {
   categories: Category[];
@@ -212,6 +219,8 @@ interface AdminDashboardProps {
   onSaveBanners?: (banners: PromoBanner[]) => void;
   onSaveOrders: (orders: Order[]) => void;
   onSaveSettings: (settings: StoreSettings) => void;
+  serverDbStatus?: ServerDatabaseStatus | null;
+  onAdminHydrateFromServer?: (data: AdminBootstrapResponse) => void;
   onBackToStore: () => void;
 }
 
@@ -252,6 +261,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onSaveBanners,
   onSaveOrders,
   onSaveSettings,
+  serverDbStatus: _serverDbStatus = null,
+  onAdminHydrateFromServer,
   onBackToStore,
 }) => {
   const [fallbackAdminUsers, setFallbackAdminUsers] = useState<AdminUser[]>(
@@ -337,13 +348,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   });
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
+  const [setupConfirmPass, setSetupConfirmPass] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
+  const [authStatus, setAuthStatus] = useState<AdminAuthStatusResponse | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [reminderDismissedForSession, setReminderDismissedForSession] = useState(false);
   const [previewReminderStyle, setPreviewReminderStyle] =
     useState<BackupReminderStyle | null>(null);
   const [reminderClockTick, setReminderClockTick] = useState<number>(() => Date.now());
   const [quickBackupFeedback, setQuickBackupFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isAuthenticated) return;
+    let active = true;
+    apiClient.getAdminAuthStatus().then((status) => {
+      if (!active || !status) return;
+      setAuthStatus(status);
+      if (status.needsInitialSetup && !loginUser) {
+        setLoginUser(status.defaultMasterUsername || 'admin');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -422,6 +451,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const persistSellerQuotes = (next: SellerQuote[]) => {
     setSellerQuotes(next);
     storageService.saveSellerQuotes(next);
+    void apiClient.saveCollection('sellerQuotes', next);
   };
   const [sellerCustomProducts, setSellerCustomProducts] = useState<SellerCustomProduct[]>(
     () => storageService.getSellerCustomProducts()
@@ -429,6 +459,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const persistSellerCustomProducts = (next: SellerCustomProduct[]) => {
     setSellerCustomProducts(next);
     storageService.saveSellerCustomProducts(next);
+    void apiClient.saveCollection('sellerCustomProducts', next);
   };
   const [monthlySalesGoals, setMonthlySalesGoals] = useState<MonthlySalesGoal[]>(
     () => storageService.getMonthlySalesGoals()
@@ -436,6 +467,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const persistMonthlySalesGoals = (next: MonthlySalesGoal[]) => {
     setMonthlySalesGoals(next);
     storageService.saveMonthlySalesGoals(next);
+    void apiClient.saveCollection('monthlySalesGoals', next);
   };
   const handleSaveMonthlySalesGoal = (goal: MonthlySalesGoal) => {
     const updated = upsertMonthlySalesGoal(monthlySalesGoals, goal);
@@ -661,59 +693,107 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const completeAuthenticatedSession = async (loggedUser: AdminUser) => {
+    const nowIso = new Date().toISOString();
+    const firstAllowedTab = getEffectiveAllowedTabs(loggedUser)[0] || 'kanban';
+
+    const remoteBootstrap = await apiClient.fetchAdminBootstrap();
+    if (remoteBootstrap) {
+      setDeletedProducts(remoteBootstrap.deletedProducts);
+      setSellerQuotes(remoteBootstrap.sellerQuotes);
+      setSellerCustomProducts(remoteBootstrap.sellerCustomProducts);
+      setMonthlySalesGoals(remoteBootstrap.monthlySalesGoals);
+      onAdminHydrateFromServer?.(remoteBootstrap);
+    }
+
+    setCurrentAdminUserId(loggedUser.id);
+    setSessionStartedAt(nowIso);
+    setNowClock(new Date());
+    setActiveTab(firstAllowedTab);
+    setIsAuthenticated(true);
+    setIsMobileNavOpen(false);
+    setReminderDismissedForSession(false);
+    setPreviewReminderStyle(null);
+    setReminderClockTick(Date.now());
+    setLoginError(null);
+    setLoginPass('');
+    setSetupConfirmPass('');
+
+    recordAdminAction({
+      actorOverride: loggedUser,
+      category: 'admin_auth',
+      outcome: 'allowed',
+      rawTarget: `@${loggedUser.username}`,
+      summary: `Login autorizado: ${loggedUser.name} (${ADMIN_ROLE_META[loggedUser.role].shortLabel})`,
+      detail: `Acesso autenticado à área operacional do Gestor Limper MT com nível ${ADMIN_ROLE_META[loggedUser.role].label}.`,
+    });
+  };
+
+  const handleInitialSetup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAuthBusy) return;
+    setLoginError(null);
+
+    const cleanUser = loginUser.trim().toLowerCase() || 'admin';
+    if (loginPass.trim().length < 6) {
+      setLoginError('A senha Master deve ter pelo menos 6 caracteres.');
+      return;
+    }
+    if (loginPass !== setupConfirmPass) {
+      setLoginError('A confirmação da senha não confere.');
+      return;
+    }
+
+    setIsAuthBusy(true);
+    try {
+      const result = await apiClient.setupInitialAdmin(cleanUser, loginPass.trim());
+      if (result.ok && result.user) {
+        setAuthStatus((prev) => (prev ? { ...prev, needsInitialSetup: false } : prev));
+        await completeAuthenticatedSession(result.user);
+      } else {
+        setLoginError(result.error || 'Não foi possível configurar o acesso Master.');
+      }
+    } finally {
+      setIsAuthBusy(false);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isAuthBusy) return;
+    setLoginError(null);
     const cleanUser = loginUser.trim().toLowerCase();
-    const auth = authenticateAdminUser(effectiveAdminUsers, loginUser, loginPass);
 
-    if (auth.ok) {
-      const loggedUser = auth.user;
-      const nowIso = new Date().toISOString();
-      const firstAllowedTab = getEffectiveAllowedTabs(loggedUser)[0] || 'kanban';
+    setIsAuthBusy(true);
+    try {
+      const serverAuth = await apiClient.loginAdmin(loginUser, loginPass);
+      if (serverAuth.ok && serverAuth.user) {
+        await completeAuthenticatedSession(serverAuth.user);
+        return;
+      }
 
-      setCurrentAdminUserId(loggedUser.id);
-      setSessionStartedAt(nowIso);
-      setNowClock(new Date());
-      setActiveTab(firstAllowedTab);
-      setIsAuthenticated(true);
-      setIsMobileNavOpen(false);
-      setReminderDismissedForSession(false);
-      setPreviewReminderStyle(null);
-      setReminderClockTick(Date.now());
-      setLoginError(null);
-      setLoginPass('');
+      if (serverAuth.reason === 'inactive_account' && serverAuth.matchedUser) {
+        setLoginError(
+          serverAuth.error ||
+            'Esta conta administrativa está suspensa. Solicite reativação ao usuário Master.'
+        );
+        onRecordSecurityEvent?.({
+          category: 'admin_auth',
+          outcome: 'blocked',
+          actorLabel: formatAdminActorLabel(serverAuth.matchedUser),
+          actorUsername: serverAuth.matchedUser.username,
+          actorRole: serverAuth.matchedUser.role,
+          rawTarget: `@${serverAuth.matchedUser.username}`,
+          summary: `Login recusado (conta suspensa): ${serverAuth.matchedUser.name}`,
+          detail:
+            'Tentativa de acesso com conta desativada bloqueada automaticamente pelo controle de acessos.',
+        });
+        return;
+      }
 
-      persistAdminUsers(
-        effectiveAdminUsers.map((u) =>
-          u.id === loggedUser.id ? { ...u, lastLoginAt: nowIso } : u
-        )
-      );
-
-      recordAdminAction({
-        actorOverride: loggedUser,
-        category: 'admin_auth',
-        outcome: 'allowed',
-        rawTarget: `@${loggedUser.username}`,
-        summary: `Login autorizado: ${loggedUser.name} (${ADMIN_ROLE_META[loggedUser.role].shortLabel})`,
-        detail: `Acesso autenticado à área operacional do Gestor Limper MT com nível ${ADMIN_ROLE_META[loggedUser.role].label}.`,
-      });
-    } else if (auth.reason === 'inactive_account' && auth.matchedUser) {
       setLoginError(
-        'Esta conta administrativa está suspensa. Solicite reativação ao usuário Master.'
+        serverAuth.error || 'Credenciais inválidas. Confira usuário e senha de acesso.'
       );
-      onRecordSecurityEvent?.({
-        category: 'admin_auth',
-        outcome: 'blocked',
-        actorLabel: formatAdminActorLabel(auth.matchedUser),
-        actorUsername: auth.matchedUser.username,
-        actorRole: auth.matchedUser.role,
-        rawTarget: `@${auth.matchedUser.username}`,
-        summary: `Login recusado (conta suspensa): ${auth.matchedUser.name}`,
-        detail:
-          'Tentativa de acesso com conta desativada bloqueada automaticamente pelo controle de acessos.',
-      });
-    } else {
-      setLoginError('Credenciais inválidas. Confira usuário e senha de acesso.');
       onRecordSecurityEvent?.({
         category: 'admin_auth',
         outcome: 'blocked',
@@ -723,6 +803,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         summary: 'Tentativa de login administrativo bloqueada',
         detail: 'Credenciais inválidas rejeitadas na tela de acesso restrito.',
       });
+    } finally {
+      setIsAuthBusy(false);
     }
   };
 
@@ -736,6 +818,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         : 'Sessão administrativa encerrada',
       detail: 'Usuário desconectado manualmente do Painel Gestor Limper MT.',
     });
+    clearAdminAuthToken();
     setIsAuthenticated(false);
     setCurrentAdminUserId(null);
     setSessionStartedAt(null);
@@ -744,6 +827,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setReminderDismissedForSession(false);
     setPreviewReminderStyle(null);
     setLoginPass('');
+    setSetupConfirmPass('');
     setLoginError(null);
   };
 
@@ -1458,6 +1542,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const persistDeletedProducts = (next: DeletedProductEntry[]) => {
     setDeletedProducts(next);
     storageService.saveDeletedProducts(next);
+    void apiClient.saveCollection('deletedProducts', next);
   };
 
   const requestDeleteProducts = (ids: string[]) => {
@@ -2689,46 +2774,115 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleLogin} className="space-y-3.5">
-              <div>
-                <label
-                  htmlFor="admin-user"
-                  className="block text-xs font-bold text-zinc-700 mb-1"
-                >
-                  Usuário Lojista
-                </label>
-                <input
-                  id="admin-user"
-                  type="text"
-                  value={loginUser}
-                  onChange={(e) => setLoginUser(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
-                />
-              </div>
+            {authStatus?.needsInitialSetup ? (
+              <form onSubmit={handleInitialSetup} className="space-y-3.5">
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs leading-relaxed">
+                  <strong>Primeiro acesso seguro:</strong> crie o usuário e a senha Master que ficarão protegidos com criptografia no banco de dados.
+                </div>
 
-              <div>
-                <label
-                  htmlFor="admin-pass"
-                  className="block text-xs font-bold text-zinc-700 mb-1"
-                >
-                  Senha de Acesso
-                </label>
-                <input
-                  id="admin-pass"
-                  type="password"
-                  value={loginPass}
-                  onChange={(e) => setLoginPass(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
-                />
-              </div>
+                <div>
+                  <label
+                    htmlFor="admin-user"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
+                    Usuário Master
+                  </label>
+                  <input
+                    id="admin-user"
+                    type="text"
+                    value={loginUser}
+                    onChange={(e) => setLoginUser(e.target.value)}
+                    placeholder="admin"
+                    className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                  />
+                </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-sm rounded-xl cursor-pointer shadow-2xs transition-colors"
-              >
-                Entrar no Painel Lojista
-              </button>
-            </form>
+                <div>
+                  <label
+                    htmlFor="admin-pass"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
+                    Nova Senha Master (mín. 6 caracteres)
+                  </label>
+                  <input
+                    id="admin-pass"
+                    type="password"
+                    value={loginPass}
+                    onChange={(e) => setLoginPass(e.target.value)}
+                    autoComplete="new-password"
+                    className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="admin-pass-confirm"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
+                    Confirmar Senha Master
+                  </label>
+                  <input
+                    id="admin-pass-confirm"
+                    type="password"
+                    value={setupConfirmPass}
+                    onChange={(e) => setSetupConfirmPass(e.target.value)}
+                    autoComplete="new-password"
+                    className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isAuthBusy}
+                  className="w-full py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] disabled:opacity-60 text-zinc-950 font-extrabold text-sm rounded-xl cursor-pointer shadow-2xs transition-colors"
+                >
+                  {isAuthBusy ? 'Configurando...' : 'Definir Senha Master e Entrar'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleLogin} className="space-y-3.5">
+                <div>
+                  <label
+                    htmlFor="admin-user"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
+                    Usuário Lojista
+                  </label>
+                  <input
+                    id="admin-user"
+                    type="text"
+                    value={loginUser}
+                    onChange={(e) => setLoginUser(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="admin-pass"
+                    className="block text-xs font-bold text-zinc-700 mb-1"
+                  >
+                    Senha de Acesso
+                  </label>
+                  <input
+                    id="admin-pass"
+                    type="password"
+                    value={loginPass}
+                    onChange={(e) => setLoginPass(e.target.value)}
+                    autoComplete="current-password"
+                    className="w-full px-3.5 py-2.5 bg-[#FAFAFA] border border-zinc-300 rounded-xl text-sm font-mono text-zinc-900 focus:bg-white focus:border-[#FFBE00] focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isAuthBusy}
+                  className="w-full py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] disabled:opacity-60 text-zinc-950 font-extrabold text-sm rounded-xl cursor-pointer shadow-2xs transition-colors"
+                >
+                  {isAuthBusy ? 'Validando...' : 'Entrar no Painel Lojista'}
+                </button>
+              </form>
+            )}
 
             <div className="mt-4 pt-3.5 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-500">
               <span>Acesso restrito à equipe</span>

@@ -310,11 +310,14 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
             (t) => t !== 'users' && ASSIGNABLE_NON_MASTER_TABS.includes(t)
           );
 
+    const isKeepingExistingServerPassword =
+      Boolean(editingUserId) && password.trim().length === 0;
+
     const validation = validateAdminUserDraft(
       {
         name,
         username: normalizedUser,
-        password,
+        password: isKeepingExistingServerPassword ? '__KEEP_SERVER_HASH__' : password,
         role,
         allowedTabs: effectiveTabs,
         active,

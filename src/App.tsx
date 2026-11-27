@@ -80,6 +80,11 @@ import {
   upsertCustomerAddress,
 } from './utils/commerce';
 import { DEFAULT_CUSTOMER_PROFILE, storageService } from './utils/storage';
+import {
+  apiClient,
+  type AdminBootstrapResponse,
+  type ServerDatabaseStatus,
+} from './utils/api';
 import { GENERATED_IMAGES, LIMPER_LOGO_URL } from './data/initialCatalog';
 import { ProductImageWithFallback, ResponsiveBannerImage } from './components/CategoryIcon';
 import { ActiveView, Header } from './components/Header';
@@ -150,6 +155,64 @@ export default function App() {
     storageService.getBackupSchedule()
   );
   const [activeCouponCode, setActiveCouponCode] = useState<string>('');
+  const [serverDbStatus, setServerDbStatus] = useState<ServerDatabaseStatus | null>(null);
+
+  // Hydrate public storefront catalog & settings from server PostgreSQL database on mount
+  useEffect(() => {
+    let active = true;
+    apiClient.fetchStorefrontBootstrap().then((remote) => {
+      if (!active || !remote) return;
+      if (Array.isArray(remote.categories) && remote.categories.length > 0) {
+        setCategories(remote.categories);
+        storageService.saveCategories(remote.categories);
+      }
+      if (Array.isArray(remote.products)) {
+        setProducts(remote.products);
+        storageService.saveProducts(remote.products);
+      }
+      if (Array.isArray(remote.kits)) {
+        setKits(remote.kits);
+        storageService.saveKits(remote.kits);
+      }
+      if (Array.isArray(remote.coupons)) {
+        setCoupons(remote.coupons);
+        storageService.saveCoupons(remote.coupons);
+      }
+      if (Array.isArray(remote.banners)) {
+        setBanners(remote.banners);
+        storageService.saveBanners(remote.banners);
+      }
+      if (remote.settings) {
+        setSettings(remote.settings);
+        storageService.saveSettings(remote.settings);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // When a customer is logged in with their phone, sync strictly their own orders from the server DB
+  useEffect(() => {
+    if (!isCustomerLoggedIn(customerProfile) || !customerProfile.phone) return;
+    let active = true;
+    apiClient.lookupCustomerOrders(customerProfile.phone).then((remoteOrders) => {
+      if (!active || !remoteOrders || remoteOrders.length === 0) return;
+      setOrders((prev) => {
+        const byId = new Map<string, Order>();
+        for (const o of remoteOrders) byId.set(o.id, o);
+        for (const o of prev) {
+          if (!byId.has(o.id)) byId.set(o.id, o);
+        }
+        return Array.from(byId.values()).sort(
+          (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+        );
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [customerProfile.phone, customerProfile.isRegistered]);
 
   useEffect(() => {
     let active = true;
@@ -480,6 +543,7 @@ export default function App() {
       setSecurityLogs((prev) => {
         const next = appendSecurityAuditEvent(prev, input);
         storageService.saveSecurityLogs(next);
+        void apiClient.saveCollection('securityLogs', next);
         return next;
       });
     },
@@ -489,76 +553,128 @@ export default function App() {
   const handleClearSecurityLogs = () => {
     setSecurityLogs([]);
     storageService.saveSecurityLogs([]);
+    void apiClient.saveCollection('securityLogs', []);
   };
 
   const handleSaveCategories = (updated: Category[]) => {
     setCategories(updated);
     storageService.saveCategories(updated);
+    void apiClient.saveCollection('categories', updated);
   };
 
   const handleSaveProducts = (updated: Product[]) => {
     setProducts(updated);
     storageService.saveProducts(updated);
+    void apiClient.saveCollection('products', updated);
   };
 
   const handleSaveKits = (updated: PromoKit[]) => {
     setKits(updated);
     storageService.saveKits(updated);
+    void apiClient.saveCollection('kits', updated);
   };
 
   const handleSaveCoupons = (updated: PromoCoupon[]) => {
     setCoupons(updated);
     storageService.saveCoupons(updated);
+    void apiClient.saveCollection('coupons', updated);
   };
 
   const handleSaveBanners = (updated: PromoBanner[]) => {
     setBanners(updated);
     storageService.saveBanners(updated);
+    void apiClient.saveCollection('banners', updated);
   };
 
   const handleSaveOrders = (updated: Order[]) => {
     setOrders(updated);
     storageService.saveOrders(updated);
+    void apiClient.saveCollection('orders', updated);
   };
 
   const handleSaveSettings = (updated: StoreSettings) => {
     setSettings(updated);
     storageService.saveSettings(updated);
+    void apiClient.saveCollection('settings', updated);
   };
 
   const handleSaveAdminUsers = (updated: AdminUser[]) => {
     setAdminUsers(updated);
     storageService.saveAdminUsers(updated);
+    void apiClient.saveCollection('adminUsers', updated);
   };
 
   const handleSaveSiteBackups = (updated: SiteBackupSnapshot[]) => {
     setSiteBackups(updated);
     storageService.saveSiteBackups(updated);
+    void apiClient.saveCollection('siteBackups', updated);
   };
 
   const handleSaveBackupSchedule = (updated: BackupScheduleConfig) => {
     setBackupSchedule(updated);
     storageService.saveBackupSchedule(updated);
+    void apiClient.saveCollection('backupSchedule', updated);
   };
+
+  const handleAdminHydrateFromServer = React.useCallback((data: AdminBootstrapResponse) => {
+    setCategories(data.categories);
+    storageService.saveCategories(data.categories);
+    setProducts(data.products);
+    storageService.saveProducts(data.products);
+    storageService.saveDeletedProducts(data.deletedProducts);
+    setKits(data.kits);
+    storageService.saveKits(data.kits);
+    setCoupons(data.coupons);
+    storageService.saveCoupons(data.coupons);
+    setBanners(data.banners);
+    storageService.saveBanners(data.banners);
+    setOrders(data.orders);
+    storageService.saveOrders(data.orders);
+    setSettings(data.settings);
+    storageService.saveSettings(data.settings);
+    setAdminUsers(data.adminUsers);
+    storageService.saveAdminUsers(data.adminUsers);
+    setSecurityLogs(data.securityLogs);
+    storageService.saveSecurityLogs(data.securityLogs);
+    setSiteBackups(data.siteBackups);
+    storageService.saveSiteBackups(data.siteBackups);
+    setBackupSchedule(data.backupSchedule);
+    storageService.saveBackupSchedule(data.backupSchedule);
+    storageService.saveSellerQuotes(data.sellerQuotes);
+    storageService.saveSellerCustomProducts(data.sellerCustomProducts);
+    storageService.saveMonthlySalesGoals(data.monthlySalesGoals);
+    if (data.dbStatus) {
+      setServerDbStatus(data.dbStatus);
+    }
+  }, []);
 
   const handleRestoreSiteBackup = (snapshot: SiteBackupSnapshot) => {
     const p = snapshot.payload;
-    handleSaveCategories(p.categories);
-    handleSaveProducts(p.products);
+    setCategories(p.categories);
+    storageService.saveCategories(p.categories);
+    setProducts(p.products);
+    storageService.saveProducts(p.products);
     if (Array.isArray(p.deletedProducts)) {
       storageService.saveDeletedProducts(p.deletedProducts);
     }
-    handleSaveKits(p.kits);
-    handleSaveCoupons(p.coupons);
-    handleSaveBanners(p.banners);
-    handleSaveOrders(p.orders);
-    handleSaveSettings(p.settings);
+    setKits(p.kits);
+    storageService.saveKits(p.kits);
+    setCoupons(p.coupons);
+    storageService.saveCoupons(p.coupons);
+    setBanners(p.banners);
+    storageService.saveBanners(p.banners);
+    setOrders(p.orders);
+    storageService.saveOrders(p.orders);
+    setSettings(p.settings);
+    storageService.saveSettings(p.settings);
     if (
       Array.isArray(p.adminUsers) &&
       p.adminUsers.some((u) => u.role === 'master' && u.active)
     ) {
-      handleSaveAdminUsers(p.adminUsers);
+      setAdminUsers(p.adminUsers);
+      storageService.saveAdminUsers(p.adminUsers);
     }
+    void apiClient.restoreBackup(p);
   };
 
   const handleSaveCustomerProfile = (profile: CustomerProfile) => {
@@ -689,7 +805,17 @@ export default function App() {
 
   const handleCompleteOrder = (newOrder: Order) => {
     const updatedOrders = [newOrder, ...orders];
-    handleSaveOrders(updatedOrders);
+    setOrders(updatedOrders);
+    storageService.saveOrders(updatedOrders);
+    void apiClient.createOrder(newOrder).then((persistedOrder) => {
+      if (!persistedOrder || persistedOrder.id === newOrder.id) return;
+      setOrders((prev) =>
+        prev.map((o) => (o.id === newOrder.id ? persistedOrder : o))
+      );
+      setConfirmedOrder((prev) =>
+        prev && prev.id === newOrder.id ? persistedOrder : prev
+      );
+    });
     setSessionOrderIds((prev) =>
       prev.includes(newOrder.id) ? prev : [newOrder.id, ...prev]
     );
@@ -2160,6 +2286,8 @@ export default function App() {
             onSaveBanners={handleSaveBanners}
             onSaveOrders={handleSaveOrders}
             onSaveSettings={handleSaveSettings}
+            serverDbStatus={serverDbStatus}
+            onAdminHydrateFromServer={handleAdminHydrateFromServer}
             onBackToStore={handleGoHome}
           />
         )}
