@@ -176,9 +176,9 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md text-zinc-900 border-b border-zinc-200/90 shadow-2xs no-print transition-all">
-      {/* Tier 1: Top Regional, Official Store Address & Phone Strip */}
-      <div className="bg-[#181A20] text-white text-[10px] sm:text-[11px]">
+    <>
+      {/* Tier 1: Top Regional, Official Store Address & Phone Strip (scrolls naturally so mobile sticky chrome stays lean) */}
+      <div className="bg-[#181A20] text-white text-[10px] sm:text-[11px] no-print">
         <div className="max-w-[1360px] mx-auto px-3 sm:px-6 h-7 sm:h-8 flex items-center justify-between gap-2 sm:gap-4">
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 truncate">
             <MapPin className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#FFBE00] shrink-0" />
@@ -207,10 +207,15 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-2.5 sm:gap-3.5 text-zinc-300 shrink-0">
             <a
               href={buildStoreTelHref(storeWhatsappNumber)}
+              aria-label={`Ligar para ${
+                storeWhatsappDisplay ||
+                formatStoreWhatsAppDisplay(storeWhatsappNumber) ||
+                '(65) 3029-6824'
+              }`}
               className="inline-flex items-center gap-1 text-white hover:text-[#FFBE00] font-mono font-bold transition-colors"
             >
               <Phone className="w-3 h-3 text-[#FFBE00]" />
-              <span className="hidden xs:inline sm:inline">
+              <span className="hidden sm:inline">
                 {storeWhatsappDisplay ||
                   formatStoreWhatsAppDisplay(storeWhatsappNumber) ||
                   '(65) 3029-6824'}
@@ -228,141 +233,140 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Tier 2: Main Drogasil + Todimo Header
-          Mobile (< md): Row 1 = Logo + Compact Action Icons & Basket; Row 2 = 100% Full-Width Interactive Search Bar
-          Desktop (md+): Single Row = Logo + Centered Interactive Search Bar + 4 Icon Actions */}
-      <div className="max-w-[1360px] mx-auto px-3 sm:px-6 py-2.5 sm:py-3 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-2.5 gap-x-3 lg:gap-6">
-        {/* 1. Interactive Brand Logo (Always resets filters & returns smoothly to Home top) */}
-        <button
-          type="button"
-          onClick={handleLogoHomeClick}
-          title="Voltar para o Início · Limper MT"
-          aria-label="Limper MT Produtos de Limpeza - Voltar para a Página Inicial"
-          className="order-1 group flex items-center gap-1.5 sm:gap-2 shrink-0 rounded-xl px-1.5 py-1 -ml-1.5 hover:bg-amber-50/80 active:scale-95 transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-[#FFBE00]"
-        >
-          <img
-            src={LIMPER_LOGO_URL}
-            alt="Limper MT Produtos de Limpeza"
-            className="h-8 sm:h-11 w-auto object-contain group-hover:scale-[1.02] transition-transform"
-          />
-          <span className="font-display text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-zinc-950 bg-[#FFBE00] group-hover:bg-[#E3262E] group-hover:text-white px-1.5 py-0.5 rounded-md transition-colors">
-            MT
-          </span>
-          {isAwayFromHome && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 border border-rose-200 text-[#E3262E] text-[10px] font-extrabold animate-fade-in">
-              <Home className="w-3 h-3" />
-              <span className="hidden sm:inline">Voltar ao Início</span>
-            </span>
-          )}
-        </button>
-
-        {/* 2. Right Action Links (Order 2 on Mobile so it sits beside Logo; Order 3 on Desktop) */}
-        <div className="order-2 md:order-3 flex items-center gap-2 sm:gap-4 lg:gap-5 shrink-0">
-          {/* 2a. Compra rápida com receita/lista (Desktop xl+) */}
+      {/* Tier 2: Sticky Main Header (Always compact & single-row Logo + Actions on mobile/tablet; full 1-row on lg+) */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md text-zinc-900 border-b border-zinc-200/90 shadow-2xs no-print transition-all">
+        <div className="max-w-[1360px] mx-auto px-3 sm:px-6 py-2 sm:py-3 flex flex-wrap lg:flex-nowrap items-center justify-between gap-y-2 gap-x-2 sm:gap-x-4 lg:gap-6">
+          {/* 1. Interactive Brand Logo (Always resets filters & returns smoothly to Home top) */}
           <button
             type="button"
-            onClick={onOpenQuickOrderModal}
-            className="hidden xl:flex items-center gap-2.5 text-left group cursor-pointer"
+            onClick={handleLogoHomeClick}
+            title="Voltar para o Início · Limper MT"
+            aria-label="Limper MT Produtos de Limpeza - Voltar para a Página Inicial"
+            className="order-1 group flex items-center gap-1 sm:gap-2 shrink-0 rounded-xl px-1 sm:px-1.5 py-0.5 sm:py-1 -ml-1 hover:bg-amber-50/80 active:scale-95 transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-[#FFBE00]"
           >
-            <div className="w-9 h-9 rounded-xl bg-rose-50 border border-rose-200/80 flex items-center justify-center group-hover:bg-[#E3262E] group-hover:text-white text-[#E3262E] transition-colors">
-              <FilePlus2 className="w-5 h-5 shrink-0 stroke-[1.9]" />
-            </div>
-            <div className="text-xs leading-tight">
-              <span className="block text-zinc-500">Compra rápida</span>
-              <strong className="block font-extrabold text-zinc-900 group-hover:text-[#E3262E]">
-                por lista / lote
-              </strong>
-            </div>
-          </button>
-
-          {/* 2b. Perfil / Entrar ou cadastrar (Clean Drogasil-style outline icon + 2-line label) */}
-          <button
-            type="button"
-            onClick={onOpenAccountModal}
-            aria-label={
-              isLoggedIn && firstName
-                ? `Perfil de ${firstName}`
-                : 'Entrar ou cadastrar'
-            }
-            className={`flex items-center justify-center sm:justify-start gap-2 text-left group cursor-pointer min-w-[40px] min-h-[40px] sm:px-2 sm:py-1 rounded-xl transition-colors ${
-              activeView === 'account'
-                ? 'bg-rose-50/80 text-[#BA1826]'
-                : 'hover:bg-rose-50/60'
-            }`}
-          >
-            <User
-              className={`w-6 h-6 shrink-0 stroke-[1.75] transition-colors ${
-                activeView === 'account'
-                  ? 'text-[#BA1826]'
-                  : 'text-[#BA1826] group-hover:text-[#9E1420]'
-              }`}
+            <img
+              src={LIMPER_LOGO_URL}
+              alt="Limper MT Produtos de Limpeza"
+              className="h-6 min-[360px]:h-7 sm:h-10 lg:h-11 w-auto object-contain group-hover:scale-[1.02] transition-transform"
             />
-            <div className="hidden sm:block text-[13px] leading-tight">
-              <span className="block text-[11px] font-medium text-zinc-500">
-                {isLoggedIn && firstName ? 'Perfil' : 'Boas-vindas!'}
+            <span className="font-display text-[9px] sm:text-[11px] font-extrabold uppercase tracking-wider text-zinc-950 bg-[#FFBE00] group-hover:bg-[#E3262E] group-hover:text-white px-1 sm:px-1.5 py-0.5 rounded-md transition-colors">
+              MT
+            </span>
+            {isAwayFromHome && (
+              <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full bg-rose-50 border border-rose-200 text-[#E3262E] text-[10px] font-extrabold animate-fade-in">
+                <Home className="w-3 h-3" />
+                <span className="hidden sm:inline">Voltar ao Início</span>
               </span>
-              <strong
-                className={`block font-extrabold group-hover:text-[#BA1826] transition-colors ${
-                  activeView === 'account' ? 'text-[#BA1826]' : 'text-zinc-900'
+            )}
+          </button>
+
+          {/* 2. Right Action Links (Order 2 on Mobile/Tablet so it sits cleanly beside Logo; Order 3 on lg+ Desktop) */}
+          <div className="order-2 lg:order-3 flex items-center gap-1 min-[360px]:gap-1.5 sm:gap-3.5 lg:gap-4 shrink-0">
+            {/* 2a. Compra rápida com receita/lista (Desktop xl+) */}
+            <button
+              type="button"
+              onClick={onOpenQuickOrderModal}
+              className="hidden xl:flex items-center gap-2.5 text-left group cursor-pointer"
+            >
+              <div className="w-9 h-9 rounded-xl bg-rose-50 border border-rose-200/80 flex items-center justify-center group-hover:bg-[#E3262E] group-hover:text-white text-[#E3262E] transition-colors">
+                <FilePlus2 className="w-5 h-5 shrink-0 stroke-[1.9]" />
+              </div>
+              <div className="text-xs leading-tight">
+                <span className="block text-zinc-500">Compra rápida</span>
+                <strong className="block font-extrabold text-zinc-900 group-hover:text-[#E3262E]">
+                  por lista / lote
+                </strong>
+              </div>
+            </button>
+
+            {/* 2b. Perfil / Entrar ou cadastrar */}
+            <button
+              type="button"
+              onClick={onOpenAccountModal}
+              aria-label={
+                isLoggedIn && firstName
+                  ? `Perfil de ${firstName}`
+                  : 'Entrar ou cadastrar'
+              }
+              className={`flex items-center justify-center sm:justify-start gap-2 text-left group cursor-pointer w-9 h-9 sm:w-auto sm:min-h-[40px] sm:px-2 sm:py-1 rounded-xl transition-colors ${
+                activeView === 'account'
+                  ? 'bg-rose-50/80 text-[#BA1826]'
+                  : 'hover:bg-rose-50/60'
+              }`}
+            >
+              <User
+                className={`w-5 h-5 sm:w-6 sm:h-6 shrink-0 stroke-[1.8] transition-colors ${
+                  activeView === 'account'
+                    ? 'text-[#BA1826]'
+                    : 'text-[#BA1826] group-hover:text-[#9E1420]'
                 }`}
-              >
-                {isLoggedIn && firstName ? firstName : 'Entrar ou cadastrar'}
-              </strong>
-            </div>
-          </button>
+              />
+              <div className="hidden sm:block text-[13px] leading-tight">
+                <span className="block text-[11px] font-medium text-zinc-500">
+                  {isLoggedIn && firstName ? 'Perfil' : 'Boas-vindas!'}
+                </span>
+                <strong
+                  className={`block font-extrabold group-hover:text-[#BA1826] transition-colors ${
+                    activeView === 'account' ? 'text-[#BA1826]' : 'text-zinc-900'
+                  }`}
+                >
+                  {isLoggedIn && firstName ? firstName : 'Entrar ou cadastrar'}
+                </strong>
+              </div>
+            </button>
 
-          {/* 2c. Acompanhar pedidos (Clean outline package icon, zero numeric counter badge) */}
-          <button
-            type="button"
-            onClick={onSelectOrders}
-            aria-label="Acompanhar pedidos"
-            className="flex items-center justify-center sm:justify-start gap-2 text-left group cursor-pointer min-w-[40px] min-h-[40px] sm:px-2 sm:py-1 rounded-xl hover:bg-rose-50/60 transition-colors"
+            {/* 2c. Acompanhar pedidos */}
+            <button
+              type="button"
+              onClick={onSelectOrders}
+              aria-label="Acompanhar pedidos"
+              className="flex items-center justify-center sm:justify-start gap-2 text-left group cursor-pointer w-9 h-9 sm:w-auto sm:min-h-[40px] sm:px-2 sm:py-1 rounded-xl hover:bg-rose-50/60 transition-colors"
+            >
+              <Package className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-[#BA1826] group-hover:text-[#9E1420] stroke-[1.8] transition-colors" />
+              <div className="hidden lg:block text-[13px] leading-tight">
+                <span className="block text-[11px] font-medium text-zinc-500">
+                  Acompanhar
+                </span>
+                <strong className="block font-extrabold text-zinc-900 group-hover:text-[#BA1826] transition-colors">
+                  pedidos
+                </strong>
+              </div>
+            </button>
+
+            {/* 2d. Cesta / Orçamento */}
+            <button
+              type="button"
+              onClick={onOpenCart}
+              aria-label={`Abrir cesta com ${cartItemCount} itens`}
+              className="flex items-center gap-1.5 sm:gap-2.5 text-left group cursor-pointer px-2 sm:px-3 py-1.5 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] hover:bg-[#FFBE00]/30 active:scale-95 transition-all"
+            >
+              <div className="relative">
+                <ShoppingBasket className="w-5 h-5 sm:w-6 sm:h-6 text-[#E3262E] shrink-0 stroke-[2]" />
+                <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-[#E3262E] text-white font-mono text-[10px] font-extrabold flex items-center justify-center tabular-nums">
+                  {cartItemCount}
+                </span>
+              </div>
+              <div className="hidden min-[355px]:block text-[10.5px] sm:text-xs leading-tight pl-0.5">
+                <span className="hidden sm:block text-zinc-600 font-medium text-[10px] sm:text-xs">
+                  {hideAllPrices || (cartItemCount > 0 && isCartQuoteOnly)
+                    ? 'Minha Lista'
+                    : 'Minha Cesta'}
+                </span>
+                <strong className="block font-mono font-extrabold text-zinc-950 tabular-nums whitespace-nowrap">
+                  {hideAllPrices || (cartItemCount > 0 && isCartQuoteOnly)
+                    ? 'Orçamento'
+                    : formatCurrency(cartSubtotal)}
+                </strong>
+              </div>
+            </button>
+          </div>
+
+          {/* 3. Interactive Live Search Input with Instant Photo Autocomplete Dropdown
+              Spans 100% width on mobile & tablet (< lg) so 768px search is spacious; sits inline in center on lg+ */}
+          <div
+            ref={searchContainerRef}
+            className="order-3 lg:order-2 w-full lg:w-auto lg:flex-1 lg:max-w-xl relative"
           >
-            <Package className="w-6 h-6 shrink-0 text-[#BA1826] group-hover:text-[#9E1420] stroke-[1.75] transition-colors" />
-            <div className="hidden lg:block text-[13px] leading-tight">
-              <span className="block text-[11px] font-medium text-zinc-500">
-                Acompanhar
-              </span>
-              <strong className="block font-extrabold text-zinc-900 group-hover:text-[#BA1826] transition-colors">
-                pedidos
-              </strong>
-            </div>
-          </button>
-
-          {/* 2d. Cesta R$ 0,00 */}
-          <button
-            type="button"
-            onClick={onOpenCart}
-            aria-label={`Abrir cesta com ${cartItemCount} itens`}
-            className="flex items-center gap-2 sm:gap-2.5 text-left group cursor-pointer px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#FFFBEB] border border-[#FFBE00] hover:bg-[#FFBE00]/30 active:scale-95 transition-all"
-          >
-            <div className="relative">
-              <ShoppingBasket className="w-5 h-5 sm:w-6 sm:h-6 text-[#E3262E] shrink-0 stroke-[2]" />
-              <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-[#E3262E] text-white font-mono text-[10px] font-extrabold flex items-center justify-center tabular-nums">
-                {cartItemCount}
-              </span>
-            </div>
-            <div className="text-[11px] sm:text-xs leading-tight">
-              <span className="hidden xs:block text-zinc-600 font-medium text-[10px] sm:text-xs">
-                {hideAllPrices || (cartItemCount > 0 && isCartQuoteOnly)
-                  ? 'Minha Lista'
-                  : 'Minha Cesta'}
-              </span>
-              <strong className="block font-mono font-extrabold text-zinc-950 tabular-nums">
-                {hideAllPrices || (cartItemCount > 0 && isCartQuoteOnly)
-                  ? 'Orçamento'
-                  : formatCurrency(cartSubtotal)}
-              </strong>
-            </div>
-          </button>
-        </div>
-
-        {/* 3. Interactive Live Search Input with Instant Photo Autocomplete Dropdown
-            Spans 100% width on mobile (order-3 w-full) and sits inline in center on desktop (md:order-2 md:flex-1) */}
-        <div
-          ref={searchContainerRef}
-          className="order-3 md:order-2 w-full md:w-auto md:flex-1 md:max-w-xl relative"
-        >
           <label htmlFor="header-catalog-search" className="sr-only">
             Buscar na Limper MT
           </label>
@@ -489,6 +493,7 @@ export const Header: React.FC<HeaderProps> = ({
                               src={prod.imageUrl}
                               alt={prod.title}
                               volumeLabel={prod.volumeLabel}
+                              variant="thumbnail"
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                             />
                             {showPrice && discountPct > 0 && (
@@ -575,8 +580,13 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Tier 3: Sub-Header Navigation Bar (No ugly gray scrollbar on mobile!) */}
-      <div className="border-t border-zinc-100 bg-white">
+      </header>
+
+      {/* Tier 3: Sub-Header Navigation Bar (Scrolls naturally below sticky search header to preserve mobile viewport) */}
+      <nav
+        aria-label="Atalhos de categorias e utilidades"
+        className="border-b border-zinc-200/80 bg-white no-print"
+      >
         <div className="max-w-[1360px] mx-auto px-3 sm:px-6 h-10 sm:h-11 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
           <div className="flex items-center gap-3 sm:gap-4 xl:gap-5 text-xs font-medium text-zinc-700 whitespace-nowrap">
             {/* Explicit Home / Início button */}
@@ -705,7 +715,7 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </button>
         </div>
-      </div>
-    </header>
+      </nav>
+    </>
   );
 };

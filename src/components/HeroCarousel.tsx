@@ -28,7 +28,7 @@ import {
   getLogisticsSettings,
   getOrderStageMeta,
 } from '../utils/commerce';
-import { ProductImageWithFallback } from './CategoryIcon';
+import { ProductImageWithFallback, ResponsiveBannerImage } from './CategoryIcon';
 
 interface HeroCarouselProps {
   banners?: PromoBanner[];
@@ -322,7 +322,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
               </div>
 
               {/* Center Featured Offer Cards (Dynamic Products Linked to Banner or Tiered Fallback) */}
-              <div className="lg:col-span-5 px-3 pt-3 pb-2 sm:p-5 grid grid-cols-3 gap-2 sm:gap-3 items-stretch">
+              <div className="lg:col-span-5 px-3 pt-3 pb-2 sm:p-5 grid grid-cols-1 min-[355px]:grid-cols-3 gap-2 sm:gap-3 items-stretch">
                 {linkedBannerProducts.length > 0 ? (
                   linkedBannerProducts.map((prod) => {
                     const effective = getEffectivePrice(prod);
@@ -342,6 +342,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                               src={prod.imageUrl}
                               alt={prod.title}
                               volumeLabel={prod.volumeLabel}
+                              variant="thumbnail"
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                             />
                             {priceVisible && discountPct > 0 && (
@@ -529,6 +530,8 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                   <img
                     src={LIMPER_LOGO_URL}
                     alt="Limper MT"
+                    loading="lazy"
+                    decoding="async"
                     className="h-5 sm:h-6 w-auto object-contain"
                   />
                 </div>
@@ -564,11 +567,15 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                             className="bg-white rounded-xl p-2 border border-zinc-900/15 flex sm:flex-col items-center justify-between gap-2 cursor-pointer hover:shadow-md transition-all"
                           >
                             <div className="flex sm:flex-col items-center gap-2 sm:text-center min-w-0">
-                              <img
-                                src={prod.imageUrl}
-                                alt={prod.title}
-                                className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg object-cover shrink-0 border border-zinc-200"
-                              />
+                              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg overflow-hidden shrink-0 border border-zinc-200 bg-zinc-50">
+                                <ProductImageWithFallback
+                                  src={prod.imageUrl}
+                                  alt={prod.title}
+                                  volumeLabel={prod.volumeLabel}
+                                  variant="thumbnail"
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
                               <div className="min-w-0">
                                 <div className="text-[11px] font-extrabold text-zinc-900 truncate max-w-[140px] sm:max-w-[115px]">
                                   {prod.title}
@@ -632,9 +639,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
               </div>
 
               <div className="hidden lg:block lg:col-span-3 h-full min-h-[240px] relative bg-zinc-900">
-                <img
+                <ResponsiveBannerImage
                   src={currentBanner.imageUrl}
                   alt={currentBanner.title}
+                  variant="bannerSplit"
                   className="w-full h-full object-cover opacity-95"
                 />
               </div>
@@ -656,7 +664,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                 </p>
 
                 {linkedBannerProducts.length > 0 && (
-                  <div className="flex flex-wrap gap-2 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                     {linkedBannerProducts.map((prod) => {
                       const effective = getEffectivePrice(prod);
                       const priceVisible = !hideAllPrices && prod.showPrice !== false;
@@ -666,19 +674,25 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                           onClick={() =>
                             onSelectProduct ? onSelectProduct(prod) : onSelectOffers()
                           }
-                          className="bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl p-2 flex items-center gap-2.5 cursor-pointer transition-colors"
+                          className="bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl p-2 flex items-center justify-between gap-2.5 cursor-pointer transition-colors"
                         >
-                          <img
-                            src={prod.imageUrl}
-                            alt={prod.title}
-                            className="w-9 h-9 rounded-lg object-cover bg-white shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <div className="text-[11px] font-bold text-white truncate max-w-[140px]">
-                              {prod.title}
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="w-9 h-9 rounded-lg overflow-hidden bg-white shrink-0">
+                              <ProductImageWithFallback
+                                src={prod.imageUrl}
+                                alt={prod.title}
+                                volumeLabel={prod.volumeLabel}
+                                variant="thumbnail"
+                                className="w-full h-full object-cover"
+                              />
                             </div>
-                            <div className="font-mono text-xs font-extrabold text-[#FFBE00]">
-                              {priceVisible ? formatCurrency(effective) : 'Sob Consulta'}
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[11px] font-bold text-white truncate">
+                                {prod.title}
+                              </div>
+                              <div className="font-mono text-xs font-extrabold text-[#FFBE00]">
+                                {priceVisible ? formatCurrency(effective) : 'Sob Consulta'}
+                              </div>
                             </div>
                           </div>
                           {onAddToCart && (
@@ -688,7 +702,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
                                 e.stopPropagation();
                                 onAddToCart(prod);
                               }}
-                              className="px-2 py-1 rounded-lg bg-[#FFBE00] text-zinc-950 font-extrabold text-[10px] cursor-pointer"
+                              className="px-2.5 py-1.5 rounded-lg bg-[#FFBE00] text-zinc-950 font-extrabold text-[10px] shrink-0 cursor-pointer"
                             >
                               + Cesta
                             </button>
@@ -726,9 +740,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
 
               <div className="hidden lg:flex lg:col-span-5 p-6 items-center justify-center">
                 <div className="rounded-2xl overflow-hidden border-2 border-[#FFBE00] shadow-xl max-w-sm w-full bg-white">
-                  <img
+                  <ResponsiveBannerImage
                     src={currentBanner.imageUrl}
                     alt={currentBanner.title}
+                    variant="bannerSplit"
                     className="w-full h-48 object-cover"
                   />
                 </div>
@@ -880,9 +895,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
               </div>
 
               <div className="hidden lg:block lg:col-span-3 relative bg-zinc-900 min-h-[240px]">
-                <img
+                <ResponsiveBannerImage
                   src={currentBanner.imageUrl}
                   alt={currentBanner.title}
+                  variant="bannerSplit"
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-cover object-center"
                 />

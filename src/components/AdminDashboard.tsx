@@ -76,6 +76,7 @@ import {
   CustomerProfile,
   DeletedProductEntry,
   DeliveryType,
+  MonthlySalesGoal,
   Order,
   OrderDatePreset,
   OrderStatus,
@@ -146,6 +147,7 @@ import {
   summarizeOrdersPeriod,
   toDateKeyYmd,
   transitionOrderStatus,
+  upsertMonthlySalesGoal,
   validateBannerDraft,
   validateCategoryDraft,
   validateCouponDraft,
@@ -164,6 +166,7 @@ import {
   CATEGORY_ICON_CATALOG,
   CategoryIcon,
   ProductImageWithFallback,
+  ResponsiveBannerImage,
 } from './CategoryIcon';
 import { AdminCommandPalette } from './AdminCommandPalette';
 import { AdminSalesSummary } from './AdminSalesSummary';
@@ -297,6 +300,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (Array.isArray(p.sellerCustomProducts)) {
       persistSellerCustomProducts(p.sellerCustomProducts);
     }
+    if (Array.isArray(p.monthlySalesGoals)) {
+      persistMonthlySalesGoals(p.monthlySalesGoals);
+    }
     if (onRestoreSiteBackup) {
       onRestoreSiteBackup(snapshot);
       return;
@@ -423,6 +429,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const persistSellerCustomProducts = (next: SellerCustomProduct[]) => {
     setSellerCustomProducts(next);
     storageService.saveSellerCustomProducts(next);
+  };
+  const [monthlySalesGoals, setMonthlySalesGoals] = useState<MonthlySalesGoal[]>(
+    () => storageService.getMonthlySalesGoals()
+  );
+  const persistMonthlySalesGoals = (next: MonthlySalesGoal[]) => {
+    setMonthlySalesGoals(next);
+    storageService.saveMonthlySalesGoals(next);
+  };
+  const handleSaveMonthlySalesGoal = (goal: MonthlySalesGoal) => {
+    const updated = upsertMonthlySalesGoal(monthlySalesGoals, goal);
+    persistMonthlySalesGoals(updated);
+    onRecordSecurityEvent?.({
+      category: 'catalog_policy',
+      outcome: 'info',
+      actorLabel: formatAdminActorLabel(currentAdminUser),
+      actorUsername: currentAdminUser?.username,
+      actorRole: currentAdminUser?.role,
+      summary: `Metas de vendas atualizadas (${goal.monthKey})`,
+      detail: `Meta mensal definida para ${formatCurrency(goal.revenueTarget)} e ${goal.ordersTarget} pedidos.`,
+    });
   };
   const [pendingDeleteProductIds, setPendingDeleteProductIds] = useState<string[]>([]);
   const [productActionFeedback, setProductActionFeedback] = useState<{
@@ -737,6 +763,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         securityLogs,
         sellerQuotes,
         sellerCustomProducts,
+        monthlySalesGoals,
       },
       trigger: 'manual',
       label: 'Backup rápido via lembrete de segurança',
@@ -2825,14 +2852,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   return (
     <div className="admin-workspace min-h-screen flex flex-col bg-[#F4F5F7] text-zinc-900">
       {/* Clean Dedicated Admin Top Bar (Logo + Sidebar Toggle + Active Workspace Title + User Identity + Ver Loja & Sair) */}
-      <header className="sticky top-0 z-30 h-14 bg-white border-b border-zinc-200 px-4 sm:px-6 lg:px-8 no-print">
-        <div className="max-w-[1640px] mx-auto h-full flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+      <header className="sticky top-0 z-30 h-14 bg-white border-b border-zinc-200 px-3 sm:px-6 lg:px-8 no-print">
+        <div className="max-w-[1640px] mx-auto h-full flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setIsMobileNavOpen(true)}
               aria-label="Abrir menu administrativo"
-              className="md:hidden w-9 h-9 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-800 flex items-center justify-center shrink-0 cursor-pointer"
+              className="lg:hidden w-9 h-9 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-zinc-100 text-zinc-800 flex items-center justify-center shrink-0 cursor-pointer"
             >
               <Menu className="w-4 h-4" />
             </button>
@@ -2843,17 +2870,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               aria-label={isSidebarCollapsed ? 'Maximizar menu lateral' : 'Minimizar menu lateral'}
               aria-expanded={!isSidebarCollapsed}
               title={isSidebarCollapsed ? 'Maximizar menu lateral' : 'Minimizar menu lateral'}
-              className="hidden md:inline-flex h-9 px-2.5 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-[#FFFBEB] hover:border-[#FFBE00] text-zinc-700 hover:text-zinc-950 items-center justify-center gap-1.5 shrink-0 cursor-pointer text-xs font-bold transition-colors whitespace-nowrap"
+              className="hidden lg:inline-flex h-9 px-2.5 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-[#FFFBEB] hover:border-[#FFBE00] text-zinc-700 hover:text-zinc-950 items-center justify-center gap-1.5 shrink-0 cursor-pointer text-xs font-bold transition-colors whitespace-nowrap"
             >
               {isSidebarCollapsed ? (
                 <>
                   <PanelLeftOpen className="w-4 h-4 text-[#E3262E]" />
-                  <span className="hidden lg:inline">Maximizar menu</span>
+                  <span className="hidden xl:inline">Maximizar menu</span>
                 </>
               ) : (
                 <>
                   <PanelLeftClose className="w-4 h-4 text-zinc-600" />
-                  <span className="hidden lg:inline">Minimizar menu</span>
+                  <span className="hidden xl:inline">Minimizar menu</span>
                 </>
               )}
             </button>
@@ -2864,14 +2891,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 if (navItems[0]) setActiveTab(navItems[0].id);
               }}
               title="Limper MT · Gestor Lojista"
-              className="group inline-flex items-center gap-1.5 shrink-0 cursor-pointer rounded-lg px-1.5 py-1 hover:bg-amber-50/70 transition-colors"
+              className="group inline-flex items-center gap-1 sm:gap-1.5 shrink-0 cursor-pointer rounded-lg px-1 sm:px-1.5 py-1 hover:bg-amber-50/70 transition-colors"
             >
               <img
                 src={LIMPER_LOGO_URL}
                 alt="Limper MT"
-                className="h-7 w-auto object-contain"
+                className="h-6 sm:h-7 w-auto object-contain"
               />
-              <span className="font-display text-[10px] font-extrabold uppercase tracking-wider text-zinc-950 bg-[#FFBE00] group-hover:bg-[#E3262E] group-hover:text-white px-1.5 py-0.5 rounded-md transition-colors">
+              <span className="font-display text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-zinc-950 bg-[#FFBE00] group-hover:bg-[#E3262E] group-hover:text-white px-1 sm:px-1.5 py-0.5 rounded-md transition-colors">
                 MT
               </span>
             </button>
@@ -2890,13 +2917,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setIsCommandPaletteOpen(true)}
               aria-label="Abrir busca rápida e comandos (Ctrl+K)"
               title="Busca rápida de produtos, pedidos e ações (Ctrl+K)"
-              className="inline-flex items-center gap-2 h-9 px-2.5 sm:px-3 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-[#FFFBEB] hover:border-[#FFBE00] text-zinc-600 hover:text-zinc-950 text-xs font-bold cursor-pointer transition-colors whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:px-3 rounded-lg border border-zinc-200 bg-[#FAFAFA] hover:bg-[#FFFBEB] hover:border-[#FFBE00] text-zinc-600 hover:text-zinc-950 text-xs font-bold cursor-pointer transition-colors whitespace-nowrap"
             >
               <Search className="w-3.5 h-3.5 text-[#E3262E]" />
               <span className="hidden md:inline">Busca rápida</span>
@@ -2933,29 +2960,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <button
               type="button"
               onClick={onBackToStore}
-              className="px-3 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
+              aria-label="Ver Loja"
+              className="h-9 px-2 sm:px-3 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
             >
-              <ExternalLink className="w-3.5 h-3.5 text-[#E3262E]" />
-              <span>Ver Loja</span>
+              <ExternalLink className="w-3.5 h-3.5 text-[#E3262E] shrink-0" />
+              <span className="hidden min-[355px]:inline sm:hidden">Loja</span>
+              <span className="hidden sm:inline">Ver Loja</span>
             </button>
 
             <button
               type="button"
               onClick={handleLogoutAdmin}
               aria-label="Sair do Painel Lojista"
-              className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
+              className="h-9 px-2.5 sm:px-3 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-[#FFBE00] text-xs font-extrabold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap transition-colors"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">Sair</span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* Responsive Horizontal Quick-Nav Strip for Mobile (< md) */}
+      {/* Responsive Horizontal Quick-Nav Strip for Mobile & Tablet (< lg) */}
       <nav
         aria-label="Navegação Rápida Lojista"
-        className="md:hidden sticky top-14 z-20 bg-white/95 backdrop-blur-xs border-b border-zinc-200 px-3 sm:px-6 py-2 overflow-x-auto no-scrollbar no-print"
+        className="lg:hidden sticky top-14 z-20 bg-white/95 backdrop-blur-xs border-b border-zinc-200 px-3 sm:px-6 py-2 overflow-x-auto no-scrollbar no-print"
       >
         <div className="flex items-center gap-1.5 min-w-max">
           {navItems.map((item) => {
@@ -2995,13 +3024,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </nav>
 
-      {/* Slide-Over Navigation Drawer on Mobile (< md) */}
+      {/* Slide-Over Navigation Drawer on Mobile & Tablet (< lg) */}
       {isMobileNavOpen && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label="Menu do Painel Lojista"
-          className="fixed inset-0 z-50 md:hidden flex no-print"
+          className="fixed inset-0 z-50 lg:hidden flex no-print"
         >
           <div
             className="fixed inset-0 bg-zinc-950/50 backdrop-blur-xs"
@@ -3129,16 +3158,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      <section className="max-w-[1640px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex-1">
-        {/* Refined SaaS Workspace Shell (Collapsible Sidebar on Tablet/Desktop md+ + Fluid Main Area) */}
-        <div className="flex flex-col md:flex-row gap-4 lg:gap-5 items-start">
-          {/* Collapsible Navigation Sidebar (Expanded 224-256px or Minimized 68px Icon Rail) */}
+      <section className="max-w-[1640px] w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-5 flex-1">
+        {/* Refined SaaS Workspace Shell (Collapsible Sidebar on Desktop lg+ + Full-Width Mobile/Tablet Workspace) */}
+        <div className="flex flex-col lg:flex-row gap-4 lg:gap-5 items-start">
+          {/* Collapsible Navigation Sidebar (Expanded 248-256px or Minimized 68px Icon Rail) */}
           <aside
             aria-label="Barra lateral administrativa"
-            className={`hidden md:flex md:flex-col shrink-0 bg-white rounded-2xl border border-zinc-200/90 shadow-2xs sticky top-18 no-print transition-[width,padding] duration-200 ease-out ${
+            className={`hidden lg:flex lg:flex-col shrink-0 bg-white rounded-2xl border border-zinc-200/90 shadow-2xs sticky top-18 no-print transition-[width,padding] duration-200 ease-out ${
               isSidebarCollapsed
                 ? 'w-[68px] p-2 space-y-3 items-center'
-                : 'w-[224px] lg:w-[248px] xl:w-[256px] p-3 space-y-3.5'
+                : 'w-[248px] xl:w-[256px] p-3 space-y-3.5'
             }`}
           >
             {/* Sidebar Top Control Header */}
@@ -3333,7 +3362,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {currentAdminUser && (
               <div
                 data-testid="admin-welcome-bar"
-                className="bg-white rounded-2xl border border-zinc-200/90 px-4 py-3.5 sm:px-5 sm:py-4 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3.5 no-print"
+                className="bg-white rounded-2xl border border-zinc-200/90 px-4 py-3.5 sm:px-5 sm:py-4 shadow-2xs flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 no-print"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <AdminUserAvatar
@@ -3345,7 +3374,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                   <div className="min-w-0 space-y-0.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-display text-sm sm:text-base font-extrabold text-zinc-950 truncate">
+                      <h2 className="font-display text-sm sm:text-base font-extrabold text-zinc-950">
                         {dashboardDateTime.greeting}, {currentAdminUser.name}!
                       </h2>
                       <span
@@ -3385,7 +3414,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between md:justify-end gap-3 pt-2.5 md:pt-0 border-t md:border-t-0 border-zinc-100 shrink-0">
+                <div className="flex items-center justify-between xl:justify-end gap-3 pt-2.5 xl:pt-0 border-t xl:border-t-0 border-zinc-100 shrink-0">
                   <div className="flex items-center gap-2 text-xs text-zinc-600">
                     <div className="w-8 h-8 rounded-lg bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309] flex items-center justify-center shrink-0">
                       <Calendar className="w-4 h-4" />
@@ -3528,6 +3557,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               products={products}
               categories={categories}
               deletedProducts={deletedProducts}
+              monthlySalesGoals={monthlySalesGoals}
+              onSaveMonthlySalesGoal={handleSaveMonthlySalesGoal}
+              currentActorName={currentAdminUser?.name || 'Administrador'}
               onOpenManualPos={
                 canAdminUserAccessTab(currentAdminUser, 'kanban')
                   ? () => {
@@ -3586,8 +3618,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             return (
               <div className="space-y-4 no-print">
                 {/* Top Header & Primary Actions */}
-                <div className="bg-white rounded-2xl border border-zinc-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                  <div>
+                <div className="bg-white rounded-2xl border border-zinc-200 p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-display text-lg font-extrabold text-zinc-900">
                         Quadro Operacional de Separação & Histórico
@@ -5600,11 +5632,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         : 'bg-[#FAFAFA] border-zinc-200 text-zinc-700 hover:bg-white'
                                     }`}
                                   >
-                                    <img
-                                      src={preset.url}
-                                      alt={preset.label}
-                                      className="w-9 h-9 rounded-md object-cover bg-white border border-zinc-200 shrink-0"
-                                    />
+                                    <div className="w-9 h-9 rounded-md overflow-hidden bg-white border border-zinc-200 shrink-0">
+                                      <ProductImageWithFallback
+                                        src={preset.url}
+                                        alt={preset.label}
+                                        variant="thumbnail"
+                                        className="w-full h-full object-cover"
+                                      />
+                                    </div>
                                     <span className="text-[11px] leading-tight line-clamp-2">
                                       {preset.label}
                                     </span>
@@ -5653,6 +5688,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 src={previewProduct.imageUrl}
                                 alt={previewProduct.title}
                                 volumeLabel={previewProduct.volumeLabel}
+                                variant="productCard"
                                 className="w-full h-full object-contain rounded-lg"
                               />
                               {prodShowPrice && previewDiscountPct > 0 && (
@@ -6183,6 +6219,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       src={prod.imageUrl}
                                       alt={prod.title}
                                       volumeLabel={prod.volumeLabel}
+                                      variant="thumbnail"
                                       className="w-full h-full object-cover"
                                     />
                                   </div>
@@ -6437,8 +6474,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onClick={openCreateKit}
                   className="px-4 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Cadastrar Novo Kit com Imagem</span>
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Cadastrar Novo Kit com Imagem</span>
                 </button>
               </div>
 
@@ -6616,6 +6653,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       <ProductImageWithFallback
                                         src={prod.imageUrl}
                                         alt={prod.title}
+                                        variant="thumbnail"
                                         className="w-full h-full object-cover"
                                       />
                                     </div>
@@ -6681,6 +6719,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                           <ProductImageWithFallback
                                             src={prod.imageUrl}
                                             alt={prod.title}
+                                            variant="thumbnail"
                                             className="w-full h-full object-cover"
                                           />
                                         </div>
@@ -6860,6 +6899,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <ProductImageWithFallback
                           src={kitImage}
                           alt={kitTitle || 'Preview da imagem do Kit'}
+                          variant="kitCard"
                           className="w-full h-full object-cover"
                         />
                         <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold shadow-xs">
@@ -6982,22 +7022,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <ProductImageWithFallback
                             src={kit.imageUrl}
                             alt={kit.title}
+                            variant="kitCard"
                             className="w-full h-full object-cover"
                           />
-                          <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold shadow-xs">
-                            {kit.badge}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleKitActive(kit)}
-                            className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md font-mono text-[10px] font-extrabold cursor-pointer ${
-                              kit.active
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-zinc-700 text-white'
-                            }`}
-                          >
-                            {kit.active ? 'ATIVO NA HOME' : 'OCULTO'}
-                          </button>
+                          <div className="absolute top-2.5 inset-x-2.5 flex items-center justify-between gap-2">
+                            <span className="px-2.5 py-0.5 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold shadow-xs truncate min-w-0">
+                              {kit.badge}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleKitActive(kit)}
+                              className={`shrink-0 px-2 py-0.5 rounded-md font-mono text-[10px] font-extrabold cursor-pointer shadow-xs ${
+                                kit.active
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-zinc-700 text-white'
+                              }`}
+                            >
+                              {kit.active ? 'ATIVO NA HOME' : 'OCULTO'}
+                            </button>
+                          </div>
                         </div>
 
                         <div className="p-4 space-y-2">
@@ -7094,8 +7137,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onClick={openCreateBanner}
                   className="px-4 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Cadastrar Novo Banner Promocional</span>
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Cadastrar Novo Banner Promocional</span>
                 </button>
               </div>
 
@@ -7307,11 +7350,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   }`}
                                 >
                                   <div className="flex items-center gap-2 min-w-0">
-                                    <img
-                                      src={prod.imageUrl}
-                                      alt={prod.title}
-                                      className="w-8 h-8 rounded-lg object-cover border border-zinc-200 shrink-0"
-                                    />
+                                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-zinc-200 shrink-0 bg-zinc-50">
+                                      <ProductImageWithFallback
+                                        src={prod.imageUrl}
+                                        alt={prod.title}
+                                        volumeLabel={prod.volumeLabel}
+                                        variant="thumbnail"
+                                        className="w-full h-full object-cover"
+                                      />
+                                    </div>
                                     <div className="truncate">
                                       <strong className="text-zinc-900 block truncate">
                                         {prod.title}
@@ -7356,9 +7403,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       <div className="rounded-2xl overflow-hidden border border-zinc-200 bg-white h-40 relative">
-                        <img
+                        <ResponsiveBannerImage
                           src={bannerImage}
                           alt={bannerTitle || 'Preview do Banner'}
+                          variant="kitCard"
                           className="w-full h-full object-cover"
                         />
                         <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-md bg-[#FFBE00] text-zinc-950 font-mono text-[10px] font-extrabold shadow-xs">
@@ -7436,9 +7484,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       >
                         <div>
                           <div className="relative h-36 bg-zinc-900 overflow-hidden">
-                            <img
+                            <ResponsiveBannerImage
                               src={b.imageUrl}
                               alt={b.title}
+                              variant="kitCard"
                               className="w-full h-full object-cover opacity-85"
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
@@ -7551,8 +7600,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onClick={openCreateCoupon}
                   className="px-4 py-2.5 bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 font-extrabold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Cadastrar Novo Cupom</span>
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Cadastrar Novo Cupom</span>
                 </button>
               </div>
 
@@ -8604,6 +8653,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 securityLogs,
                 sellerQuotes,
                 sellerCustomProducts,
+                monthlySalesGoals,
               }}
               onSaveSiteBackups={persistSiteBackups}
               onSaveBackupSchedule={persistBackupSchedule}
@@ -8670,9 +8720,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onClick={(e) => {
             if (e.target === e.currentTarget) setPrintOrder(null);
           }}
-          className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block"
+          className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block"
         >
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-zinc-300 shadow-2xl space-y-4 my-auto print:shadow-none print:border-0 print:max-w-full print:p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 border border-zinc-300 shadow-2xl space-y-4 my-auto print:max-h-none print:overflow-visible print:shadow-none print:border-0 print:max-w-full print:p-4">
             <div className="flex items-start justify-between border-b border-dashed border-zinc-300 pb-3">
               <div>
                 <p className="text-[11px] font-mono uppercase text-zinc-500">
@@ -8764,12 +8814,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 return (
                   <div key={idx} className="space-y-1">
-                    <div className="flex items-start justify-between gap-2 text-xs font-mono text-zinc-900">
-                      <span className="font-semibold">
+                    <div className="flex items-start justify-between gap-3 text-xs font-mono text-zinc-900">
+                      <span className="font-semibold min-w-0 flex-1 break-words leading-snug">
                         [ ] {item.quantity}x {item.title} ({item.volumeLabel})
                         {item.sku ? ` [Ref: ${item.sku}]` : ''}
                       </span>
-                      <span className="tabular-nums shrink-0 font-bold">
+                      <span className="tabular-nums shrink-0 whitespace-nowrap font-bold">
                         {isOrderQuoteOnly(printOrder) || item.priceHidden
                           ? 'Sob consulta'
                           : formatCurrency(item.subtotal)}

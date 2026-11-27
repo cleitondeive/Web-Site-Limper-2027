@@ -5,6 +5,7 @@ import {
   Category,
   CustomerProfile,
   DeletedProductEntry,
+  MonthlySalesGoal,
   Order,
   Product,
   PromoBanner,
@@ -53,6 +54,7 @@ const STORAGE_KEYS = {
   DELETED_PRODUCTS: 'limper_mt_deleted_products_v1',
   SELLER_QUOTES: 'limper_mt_seller_quotes_v1',
   SELLER_CUSTOM_PRODUCTS: 'limper_mt_seller_custom_products_v1',
+  MONTHLY_SALES_GOALS: 'limper_mt_monthly_sales_goals_v1',
 };
 
 const IDB_NAME = 'LimperMT_Database';
@@ -202,6 +204,16 @@ export const storageService = {
   },
   saveSellerCustomProducts: (items: SellerCustomProduct[]) =>
     saveToStorage(STORAGE_KEYS.SELLER_CUSTOM_PRODUCTS, items),
+
+  getMonthlySalesGoals: (): MonthlySalesGoal[] => {
+    const loaded = loadFromStorage<MonthlySalesGoal[]>(
+      STORAGE_KEYS.MONTHLY_SALES_GOALS,
+      []
+    );
+    return Array.isArray(loaded) ? loaded : [];
+  },
+  saveMonthlySalesGoals: (goals: MonthlySalesGoal[]) =>
+    saveToStorage(STORAGE_KEYS.MONTHLY_SALES_GOALS, goals),
 
   getOrders: (): Order[] =>
     loadFromStorage<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),

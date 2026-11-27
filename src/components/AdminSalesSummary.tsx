@@ -28,6 +28,7 @@ import {
 import {
   Category,
   DeletedProductEntry,
+  MonthlySalesGoal,
   Order,
   Product,
 } from '../types/commerce';
@@ -38,12 +39,16 @@ import {
   buildSalesSummaryAnalytics,
   formatCurrency,
 } from '../utils/commerce';
+import { AdminMonthlyGoals } from './AdminMonthlyGoals';
 
 interface AdminSalesSummaryProps {
   orders: readonly Order[];
   products: readonly Product[];
   categories: readonly Category[];
   deletedProducts?: readonly DeletedProductEntry[];
+  monthlySalesGoals: readonly MonthlySalesGoal[];
+  onSaveMonthlySalesGoal: (goal: MonthlySalesGoal) => void;
+  currentActorName?: string;
   onOpenManualPos?: () => void;
   onGoToKanban?: () => void;
 }
@@ -150,6 +155,9 @@ export const AdminSalesSummary: React.FC<AdminSalesSummaryProps> = ({
   products,
   categories,
   deletedProducts = [],
+  monthlySalesGoals,
+  onSaveMonthlySalesGoal,
+  currentActorName,
   onOpenManualPos,
   onGoToKanban,
 }) => {
@@ -299,6 +307,14 @@ export const AdminSalesSummary: React.FC<AdminSalesSummaryProps> = ({
           )}
         </div>
       </header>
+
+      {/* Configuração de Metas do Mês Vigente (Faturamento & Pedidos sobre dados reais) */}
+      <AdminMonthlyGoals
+        orders={orders}
+        monthlySalesGoals={monthlySalesGoals}
+        onSaveGoal={onSaveMonthlySalesGoal}
+        currentActorName={currentActorName}
+      />
 
       {orders.length === 0 ? (
         <section className="bg-white rounded-2xl border border-zinc-200 p-10 text-center space-y-3.5">

@@ -512,6 +512,7 @@ export interface SiteBackupPayload {
   securityLogs?: SecurityAuditEvent[];
   sellerQuotes?: SellerQuote[];
   sellerCustomProducts?: SellerCustomProduct[];
+  monthlySalesGoals?: MonthlySalesGoal[];
 }
 
 export interface SiteBackupSummary {
@@ -579,6 +580,14 @@ export interface SiteBackupIntegrityResult {
   expectedChecksum?: string;
   computedChecksum: string;
   issues: string[];
+}
+
+export interface MonthlySalesGoal {
+  monthKey: string; // 'YYYY-MM' (ex: '2026-11')
+  revenueTarget: number; // Meta de faturamento mensal em R$
+  ordersTarget: number; // Meta de número de pedidos no mês
+  updatedAt: string; // ISO string
+  updatedBy?: string; // Nome do administrador que salvou
 }
 
 

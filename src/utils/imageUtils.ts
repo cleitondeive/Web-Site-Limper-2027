@@ -149,3 +149,145 @@ export async function optimizeUploadedImage(
     };
   }
 }
+
+export type ResponsiveImageVariant =
+  | 'thumbnail'
+  | 'productCard'
+  | 'productDetail'
+  | 'kitCard'
+  | 'bannerSplit'
+  | 'bannerWide'
+  | 'bannerThumb';
+
+export const RESPONSIVE_IMAGE_WIDTHS = [320, 640, 960, 1280] as const;
+
+export const RESPONSIVE_IMAGE_SIZES: Record<ResponsiveImageVariant, string> = {
+  thumbnail: '80px',
+  productCard: '(max-width: 639px) 46vw, (max-width: 1023px) 31vw, 240px',
+  productDetail: '(max-width: 767px) 92vw, 340px',
+  kitCard: '(max-width: 767px) 94vw, 32vw',
+  bannerSplit: '(max-width: 1023px) 94vw, 360px',
+  bannerWide: '(max-width: 639px) 96vw, (max-width: 1279px) 92vw, 1280px',
+  bannerThumb: '(max-width: 639px) 128px, 160px',
+};
+
+const LOCAL_RESPONSIVE_BASENAMES = new Set([
+  'banner_automotivo_1793895269182',
+  'hero_limper_cleaning_1793895267323',
+  'limper_mt_fleet_1794516605134',
+  'prod_kit_casa_1793895269106',
+  'prod_lavanderia_1793895269711',
+  'prod_limpeza_pesada_1793895270799',
+]);
+
+export interface ResponsiveImageOptions {
+  variant?: ResponsiveImageVariant;
+  sizes?: string;
+  loading?: 'lazy' | 'eager';
+  decoding?: 'async' | 'auto' | 'sync';
+}
+
+export interface ResponsiveImageAttributes {
+  src: string;
+  srcSet?: string;
+  sizes?: string;
+  loading: 'lazy' | 'eager';
+  decoding: 'async' | 'auto' | 'sync';
+}
+
+function extractLocalImageBasename(src: string): string | null {
+  const clean = src.trim().split('?')[0].split('#')[0];
+  const match = clean.match(/(?:^|\/)assets\/images\/([a-zA-Z0-9_-]+)\.(?:jpg|jpeg|png|webp)$/i);
+  if (!match) return null;
+  const base = match[1];
+  return LOCAL_RESPONSIVE_BASENAMES.has(base) ? base : null;
+}
+
+function buildRemoteResponsiveSrcSet(src: string): string | undefined {
+  if (!/^https?:\/\//i.test(src)) return undefined;
+  try {
+    const parsed = new URL(src);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host === 'images.unsplash.com') {
+      return RESPONSIVE_IMAGE_WIDTHS.map((w) => {
+        const next = new URL(parsed.toString());
+        next.searchParams.set('auto', 'format');
+        next.searchParams.set('fit', 'crop');
+        next.searchParams.set('w', String(w));
+        next.searchParams.set('q', w <= 320 ? '75' : '80');
+        return `${next.toString()} ${w}w`;
+      }).join(', ');
+    }
+
+    if (host === 'images.pexels.com') {
+      return RESPONSIVE_IMAGE_WIDTHS.map((w) => {
+        const next = new URL(parsed.toString());
+        next.searchParams.set('auto', 'compress');
+        next.searchParams.set('cs', 'tinysrgb');
+        next.searchParams.set('w', String(w));
+        return `${next.toString()} ${w}w`;
+      }).join(', ');
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Generates native lazy-loading and responsive srcset/sizes attributes for
+ * local catalog/banner assets (serving pre-sized WebP variants from 320w to 1280w)
+ * and supported external image CDNs so mobile viewports download dramatically
+ * smaller payloads instead of full desktop images.
+ */
+export function getResponsiveImageAttributes(
+  src: string,
+  options: ResponsiveImageOptions = {}
+): ResponsiveImageAttributes {
+  const variant = options.variant ?? 'productCard';
+  const loading = options.loading ?? 'lazy';
+  const decoding = options.decoding ?? 'async';
+  const sizes = options.sizes ?? RESPONSIVE_IMAGE_SIZES[variant];
+  const cleanSrc = (src || '').trim();
+
+  if (!cleanSrc || cleanSrc.startsWith('data:') || cleanSrc.startsWith('blob:')) {
+    return {
+      src: cleanSrc,
+      loading,
+      decoding,
+    };
+  }
+
+  const localBase = extractLocalImageBasename(cleanSrc);
+  if (localBase) {
+    const srcSet = RESPONSIVE_IMAGE_WIDTHS.map(
+      (w) => `/assets/images/responsive/${localBase}-${w}w.webp ${w}w`
+    ).join(', ');
+    return {
+      src: cleanSrc,
+      srcSet,
+      sizes,
+      loading,
+      decoding,
+    };
+  }
+
+  const remoteSrcSet = buildRemoteResponsiveSrcSet(cleanSrc);
+  if (remoteSrcSet) {
+    return {
+      src: cleanSrc,
+      srcSet: remoteSrcSet,
+      sizes,
+      loading,
+      decoding,
+    };
+  }
+
+  return {
+    src: cleanSrc,
+    loading,
+    decoding,
+  };
+}
+

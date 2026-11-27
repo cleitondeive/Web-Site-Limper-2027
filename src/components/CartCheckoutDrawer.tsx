@@ -207,6 +207,15 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
     }
   }, [totals.isQuoteOnly]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   const pixPayload = buildPixPayload(
     settings.pixKey,
@@ -587,6 +596,7 @@ export const CartCheckoutDrawer: React.FC<CartCheckoutDrawerProps> = ({
                         src={product.imageUrl}
                         alt={product.title}
                         volumeLabel={product.volumeLabel}
+                        variant="thumbnail"
                       />
                     </div>
 
@@ -1779,6 +1789,15 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
 }) => {
   const [copiedMsg, setCopiedMsg] = useState(false);
 
+  useEffect(() => {
+    if (!order) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [order, onClose]);
+
   if (!order) return null;
 
   const quoteOnly = isOrderQuoteOnly(order);
@@ -1815,9 +1834,12 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="order-confirmed-title"
-      className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto print:static print:bg-white print:p-0 print:block"
     >
-      <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-zinc-300 shadow-2xl space-y-4 my-auto print:shadow-none print:border-0 print:max-w-full print:p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-4 sm:p-6 border border-zinc-300 shadow-2xl space-y-4 my-auto print:max-h-none print:overflow-visible print:shadow-none print:border-0 print:max-w-full print:p-4">
         {/* Printable Comanda Header */}
         <div className="flex items-start justify-between border-b border-dashed border-zinc-300 pb-3">
           <div>

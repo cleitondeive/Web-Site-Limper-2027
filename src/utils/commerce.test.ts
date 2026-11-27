@@ -123,6 +123,9 @@ import {
   validateSellerQuoteDraft,
   validateStoreSettingsDraft,
   buildSalesSummaryAnalytics,
+  evaluateMonthlySalesGoalProgress,
+  upsertMonthlySalesGoal,
+  validateMonthlySalesGoalDraft,
   validateStoreWhatsAppInput,
   verifySiteBackupIntegrity,
 } from './commerce';
@@ -137,6 +140,10 @@ import {
   lookupLocalMtCep,
   mapViaCepResponse,
 } from './brInputMasks';
+import {
+  getResponsiveImageAttributes,
+  RESPONSIVE_IMAGE_SIZES,
+} from './imageUtils';
 import {
   INITIAL_BANNERS,
   INITIAL_CATEGORIES,
@@ -2861,12 +2868,134 @@ test('51. Sales Summary analytics computes 7-day daily orders bar series and bes
   assert.equal(ALL_ADMIN_TABS.includes('sales_summary'), true);
 });
 
+test('52. Monthly Sales Goals engine validates targets, filters strictly by current month, computes real progress & daily pace, and upserts cleanly', () => {
+  // 1. Validation rejects non-positive values and accepts valid targets
+  assert.equal(
+    validateMonthlySalesGoalDraft({ revenueTarget: 0, ordersTarget: 10 }).valid,
+    false
+  );
+  assert.equal(
+    validateMonthlySalesGoalDraft({ revenueTarget: 1200, ordersTarget: 0 }).valid,
+    false
+  );
+  assert.equal(
+    validateMonthlySalesGoalDraft({ revenueTarget: 2000, ordersTarget: 20 }).valid,
+    true
+  );
 
+  // 2. Strict current-month filtering on INITIAL_ORDERS for Nov 2026 (excludes Oct 28 order #LMP-1035)
+  const novDate = new Date(2026, 10, 26, 12, 0, 0);
+  const defaultReport = evaluateMonthlySalesGoalProgress({
+    orders: INITIAL_ORDERS,
+    goals: [],
+    now: novDate,
+  });
+  assert.equal(defaultReport.monthKey, '2026-11');
+  assert.equal(defaultReport.monthLabel, 'Novembro de 2026');
+  assert.equal(defaultReport.isConfigured, false);
+  assert.equal(defaultReport.orders.realized, 4); // Excludes Oct order
+  assert.equal(defaultReport.revenue.realized, 638.8);
+  assert.equal(defaultReport.dayOfMonth, 26);
+  assert.equal(defaultReport.daysInMonth, 30);
+  assert.equal(defaultReport.daysRemaining, 4);
 
+  // 3. Upserting a custom goal updates progress & detects achieved goals with surplus
+  const savedGoals = upsertMonthlySalesGoal([], {
+    monthKey: '2026-11',
+    revenueTarget: 600,
+    ordersTarget: 4,
+    updatedAt: novDate.toISOString(),
+    updatedBy: 'Administrador Master',
+  });
+  const achievedReport = evaluateMonthlySalesGoalProgress({
+    orders: INITIAL_ORDERS,
+    goals: savedGoals,
+    now: novDate,
+  });
+  assert.equal(achievedReport.isConfigured, true);
+  assert.equal(achievedReport.revenue.achieved, true);
+  assert.equal(achievedReport.revenue.surplus, 38.8);
+  assert.equal(achievedReport.revenue.statusLabel, 'Meta atingida');
+  assert.equal(achievedReport.orders.achieved, true);
+  assert.equal(achievedReport.orders.progressPct, 100);
 
+  // Upserting same month replaces existing entry without duplicating
+  const replacedGoals = upsertMonthlySalesGoal(savedGoals, {
+    monthKey: '2026-11',
+    revenueTarget: 2500,
+    ordersTarget: 20,
+    updatedAt: novDate.toISOString(),
+  });
+  assert.equal(replacedGoals.length, 1);
+  assert.equal(replacedGoals[0].revenueTarget, 2500);
+});
 
+test('53. getResponsiveImageAttributes emits lazy loading, async decoding, and responsive WebP srcset/sizes for products and banners', () => {
+  // 1. Local catalog product image gets 4 pre-sized WebP responsive widths + productCard sizes
+  const prodAttrs = getResponsiveImageAttributes(
+    '/assets/images/prod_lavanderia_1793895269711.jpg',
+    { variant: 'productCard' }
+  );
+  assert.equal(prodAttrs.loading, 'lazy');
+  assert.equal(prodAttrs.decoding, 'async');
+  assert.equal(prodAttrs.sizes, RESPONSIVE_IMAGE_SIZES.productCard);
+  assert.ok(
+    prodAttrs.srcSet?.includes(
+      '/assets/images/responsive/prod_lavanderia_1793895269711-320w.webp 320w'
+    )
+  );
+  assert.ok(
+    prodAttrs.srcSet?.includes(
+      '/assets/images/responsive/prod_lavanderia_1793895269711-640w.webp 640w'
+    )
+  );
+  assert.ok(
+    prodAttrs.srcSet?.includes(
+      '/assets/images/responsive/prod_lavanderia_1793895269711-960w.webp 960w'
+    )
+  );
+  assert.ok(
+    prodAttrs.srcSet?.includes(
+      '/assets/images/responsive/prod_lavanderia_1793895269711-1280w.webp 1280w'
+    )
+  );
 
+  // 2. Local banner image gets bannerSplit sizes and responsive WebP srcset
+  const bannerAttrs = getResponsiveImageAttributes(
+    '/assets/images/banner_automotivo_1793895269182.jpg',
+    { variant: 'bannerSplit' }
+  );
+  assert.equal(bannerAttrs.loading, 'lazy');
+  assert.equal(bannerAttrs.sizes, RESPONSIVE_IMAGE_SIZES.bannerSplit);
+  assert.ok(
+    bannerAttrs.srcSet?.includes(
+      '/assets/images/responsive/banner_automotivo_1793895269182-320w.webp 320w'
+    )
+  );
 
+  // 3. Thumbnail variant emits compact 80px sizes hint so mobile chooses smallest WebP
+  const thumbAttrs = getResponsiveImageAttributes(
+    '/assets/images/prod_limpeza_pesada_1793895270799.jpg',
+    { variant: 'thumbnail' }
+  );
+  assert.equal(thumbAttrs.sizes, '80px');
+  assert.ok(thumbAttrs.srcSet?.includes('320w'));
 
+  // 4. External Unsplash / Pexels URLs automatically get responsive width query srcset
+  const unsplashAttrs = getResponsiveImageAttributes(
+    'https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=1200',
+    { variant: 'bannerWide' }
+  );
+  assert.equal(unsplashAttrs.loading, 'lazy');
+  assert.equal(unsplashAttrs.sizes, RESPONSIVE_IMAGE_SIZES.bannerWide);
+  assert.ok(unsplashAttrs.srcSet?.includes('w=320'));
+  assert.ok(unsplashAttrs.srcSet?.includes('w=640'));
 
-
+  // 5. Data URLs (admin uploads) retain lazy/async without invalid srcset
+  const uploadAttrs = getResponsiveImageAttributes('data:image/webp;base64,UklGRh4=', {
+    variant: 'productCard',
+  });
+  assert.equal(uploadAttrs.loading, 'lazy');
+  assert.equal(uploadAttrs.decoding, 'async');
+  assert.equal(uploadAttrs.srcSet, undefined);
+});

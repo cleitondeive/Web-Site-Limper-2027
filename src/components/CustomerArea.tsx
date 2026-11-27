@@ -119,6 +119,15 @@ export const CustomerQuickDrawer: React.FC<CustomerQuickDrawerProps> = ({
   onSwitchAccount,
   onLogout,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const firstName = profile.name?.trim()
@@ -372,6 +381,15 @@ export const OrderTrackQuickDrawer: React.FC<OrderTrackQuickDrawerProps> = ({
   onRequireLogin,
   onOpenStoreRadar,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const loggedIn = isCustomerLoggedIn(profile);
@@ -2075,6 +2093,7 @@ export const CustomerAreaView: React.FC<CustomerAreaViewProps> = ({
                                       src={thumbSrc}
                                       alt={item.title}
                                       volumeLabel={item.volumeLabel}
+                                      variant="thumbnail"
                                       className="w-full h-full object-cover"
                                     />
                                     <span className="absolute bottom-1 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-zinc-950 text-white font-mono text-[10px] font-extrabold leading-none shadow-2xs tabular-nums">
@@ -2303,6 +2322,7 @@ export const CustomerAreaView: React.FC<CustomerAreaViewProps> = ({
                                     src={catalogMatch?.imageUrl || ''}
                                     alt={item.title}
                                     volumeLabel={item.volumeLabel}
+                                    variant="thumbnail"
                                     className="w-full h-full object-cover"
                                   />
                                   <span className="absolute bottom-1 left-1/2 -translate-x-1/2 px-2 py-0.2 rounded-full bg-zinc-950 text-white font-mono text-[10px] font-extrabold">
@@ -2577,6 +2597,7 @@ export const CustomerAreaView: React.FC<CustomerAreaViewProps> = ({
                                 src={entry.product.imageUrl}
                                 alt={entry.product.title}
                                 volumeLabel={entry.product.volumeLabel}
+                                variant="thumbnail"
                                 className="w-full h-full object-cover"
                               />
                             </div>
@@ -2662,6 +2683,7 @@ export const CustomerAreaView: React.FC<CustomerAreaViewProps> = ({
                                 src={prod.imageUrl}
                                 alt={prod.title}
                                 volumeLabel={prod.volumeLabel}
+                                variant="thumbnail"
                                 className="w-full h-full object-cover"
                               />
                             </div>

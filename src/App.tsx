@@ -81,7 +81,7 @@ import {
 } from './utils/commerce';
 import { DEFAULT_CUSTOMER_PROFILE, storageService } from './utils/storage';
 import { GENERATED_IMAGES, LIMPER_LOGO_URL } from './data/initialCatalog';
-import { ProductImageWithFallback } from './components/CategoryIcon';
+import { ProductImageWithFallback, ResponsiveBannerImage } from './components/CategoryIcon';
 import { ActiveView, Header } from './components/Header';
 import { MegaMenu } from './components/MegaMenu';
 import { HeroCarousel } from './components/HeroCarousel';
@@ -1282,6 +1282,7 @@ export default function App() {
                             <ProductImageWithFallback
                               src={prod.imageUrl}
                               alt={prod.title}
+                              variant="thumbnail"
                               className="w-full h-full object-cover"
                             />
                           </div>
@@ -1361,6 +1362,7 @@ export default function App() {
                             <ProductImageWithFallback
                               src={kit.imageUrl}
                               alt={kit.title}
+                              variant="kitCard"
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" />
@@ -1405,6 +1407,7 @@ export default function App() {
                                       <ProductImageWithFallback
                                         src={product.imageUrl}
                                         alt={product.title}
+                                        variant="thumbnail"
                                         className="w-full h-full object-cover"
                                       />
                                     </div>
@@ -1565,11 +1568,15 @@ export default function App() {
                               className="rounded-2xl bg-white border border-amber-300 p-2.5 flex items-center justify-between gap-3 cursor-pointer hover:shadow-md transition-all"
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
-                                <img
-                                  src={prod.imageUrl}
-                                  alt={prod.title}
-                                  className="w-12 h-12 rounded-xl object-cover border border-zinc-200 shrink-0"
-                                />
+                                <div className="w-12 h-12 rounded-xl overflow-hidden border border-zinc-200 shrink-0 bg-zinc-50">
+                                  <ProductImageWithFallback
+                                    src={prod.imageUrl}
+                                    alt={prod.title}
+                                    volumeLabel={prod.volumeLabel}
+                                    variant="thumbnail"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
                                 <div className="min-w-0">
                                   <div className="font-extrabold text-xs text-zinc-900 truncate">
                                     {prod.title}
@@ -1599,12 +1606,13 @@ export default function App() {
 
                     return (
                       <div className="my-4 rounded-2xl overflow-hidden h-36 bg-white border border-amber-300 flex items-center justify-between p-3 gap-3">
-                        <img
+                        <ResponsiveBannerImage
                           src={
                             activeBottomBanner?.imageUrl ||
                             GENERATED_IMAGES.bannerAutomotivo
                           }
                           alt="Linha Automotiva e Limpeza Pesada Quimiprol"
+                          variant="bannerThumb"
                           className="w-28 h-full object-cover rounded-xl shrink-0"
                         />
                         <div className="space-y-1 text-xs">
@@ -2183,14 +2191,14 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <div className="text-[11px] text-zinc-300 truncate flex items-center gap-1 mt-0.5">
+                <div className="text-[11px] text-zinc-300 flex items-center gap-1 mt-0.5 min-w-0">
                   <Truck className="w-3.5 h-3.5 text-[#FFBE00] shrink-0" />
                   {cartTotals.isQuoteOnly ? (
-                    <span>
+                    <span className="truncate">
                       Envie sua lista personalizada c/ seu nome e telefone direto no WhatsApp!
                     </span>
                   ) : cartTotals.freeShippingRemaining > 0 ? (
-                    <span>
+                    <span className="truncate">
                       Faltam{' '}
                       <strong className="text-[#FFBE00] font-mono">
                         {formatCurrency(cartTotals.freeShippingRemaining)}
@@ -2198,7 +2206,7 @@ export default function App() {
                       p/ Frete Grátis (ou Retire Grátis em 15min na Loja!)
                     </span>
                   ) : (
-                    <span className="text-emerald-400 font-bold">
+                    <span className="text-emerald-400 font-bold truncate">
                       ✓ Você ganhou Frete Grátis no Delivery ou Retirada 15min!
                     </span>
                   )}
@@ -2461,6 +2469,8 @@ export default function App() {
                 <img
                   src={LIMPER_LOGO_URL}
                   alt="Limper MT"
+                  loading="lazy"
+                  decoding="async"
                   className="h-8 w-auto object-contain group-hover:scale-[1.02] transition-transform"
                 />
                 <span className="font-display text-sm font-extrabold text-zinc-900 group-hover:text-[#E3262E] transition-colors">

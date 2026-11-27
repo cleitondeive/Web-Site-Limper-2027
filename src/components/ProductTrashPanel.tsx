@@ -94,6 +94,7 @@ export const ProductDeleteConfirmModal: React.FC<ProductDeleteConfirmModalProps>
                   src={singleProduct.imageUrl}
                   alt={singleProduct.title}
                   volumeLabel={singleProduct.volumeLabel}
+                  variant="thumbnail"
                   className="w-full h-full object-cover"
                 />
               </div>
@@ -352,6 +353,7 @@ export const ProductTrashPanel: React.FC<ProductTrashPanelProps> = ({
                       src={product.imageUrl}
                       alt={product.title}
                       volumeLabel={product.volumeLabel}
+                      variant="thumbnail"
                       className="w-full h-full object-cover"
                     />
                   </div>

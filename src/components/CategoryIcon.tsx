@@ -30,6 +30,7 @@ import {
   Wind,
 } from 'lucide-react';
 import { CategoryIconName } from '../types/commerce';
+import { getResponsiveImageAttributes, ResponsiveImageVariant } from '../utils/imageUtils';
 
 export interface CategoryIconMeta {
   name: CategoryIconName;
@@ -139,6 +140,9 @@ interface ProductImageProps {
   alt: string;
   volumeLabel?: string;
   className?: string;
+  variant?: ResponsiveImageVariant;
+  sizes?: string;
+  loading?: 'lazy' | 'eager';
 }
 
 export const ProductImageWithFallback: React.FC<ProductImageProps> = ({
@@ -146,8 +150,15 @@ export const ProductImageWithFallback: React.FC<ProductImageProps> = ({
   alt,
   volumeLabel,
   className = 'w-full h-full object-cover',
+  variant = 'productCard',
+  sizes,
+  loading = 'lazy',
 }) => {
   const [hasError, setHasError] = useState(false);
+
+  React.useEffect(() => {
+    setHasError(false);
+  }, [src]);
 
   if (hasError || !src) {
     return (
@@ -161,16 +172,74 @@ export const ProductImageWithFallback: React.FC<ProductImageProps> = ({
     );
   }
 
+  const imgAttrs = getResponsiveImageAttributes(src, {
+    variant,
+    sizes,
+    loading,
+    decoding: 'async',
+  });
+
   return (
     <div className="relative w-full h-full overflow-hidden">
       <img
-        src={src}
+        {...imgAttrs}
         alt={alt}
         referrerPolicy="no-referrer"
         onError={() => setHasError(true)}
         className={className}
-        loading="lazy"
       />
     </div>
   );
 };
+
+interface ResponsiveBannerImageProps {
+  src: string;
+  alt: string;
+  className?: string;
+  variant?: ResponsiveImageVariant;
+  sizes?: string;
+  loading?: 'lazy' | 'eager';
+  referrerPolicy?: React.HTMLAttributeReferrerPolicy;
+}
+
+export const ResponsiveBannerImage: React.FC<ResponsiveBannerImageProps> = ({
+  src,
+  alt,
+  className = 'w-full h-full object-cover',
+  variant = 'bannerSplit',
+  sizes,
+  loading = 'lazy',
+  referrerPolicy = 'no-referrer',
+}) => {
+  const [hasError, setHasError] = useState(false);
+
+  React.useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
+  if (hasError || !src) {
+    return (
+      <div className="w-full h-full bg-gradient-to-br from-zinc-900 to-zinc-800 flex items-center justify-center p-4 text-center">
+        <Sparkles className="w-7 h-7 text-[#FFBE00]" />
+      </div>
+    );
+  }
+
+  const imgAttrs = getResponsiveImageAttributes(src, {
+    variant,
+    sizes,
+    loading,
+    decoding: 'async',
+  });
+
+  return (
+    <img
+      {...imgAttrs}
+      alt={alt}
+      referrerPolicy={referrerPolicy}
+      onError={() => setHasError(true)}
+      className={className}
+    />
+  );
+};
+

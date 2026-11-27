@@ -16,6 +16,7 @@ import {
   DeliveryCityOption,
   DeliveryType,
   LogisticsDeliveryMode,
+  MonthlySalesGoal,
   Order,
   OrderDatePreset,
   OrderStatus,
@@ -5377,6 +5378,238 @@ export function buildSalesSummaryAnalytics(params: {
     topProducts,
     deliverySplit,
     paymentSplit,
+  };
+}
+
+// ============================================================================
+// MONTHLY SALES GOALS ENGINE (REVENUE & ORDERS PROGRESS FOR CURRENT MONTH)
+// ============================================================================
+
+export const DEFAULT_MONTHLY_REVENUE_GOAL = 1500;
+export const DEFAULT_MONTHLY_ORDERS_GOAL = 15;
+
+const PT_BR_MONTH_NAMES = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+];
+
+export function getMonthKeyYm(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+export function formatPtBrMonthLabel(monthKey: string): string {
+  const match = String(monthKey || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return monthKey;
+  const year = Number(match[1]);
+  const monthIdx = Number(match[2]) - 1;
+  const monthName = PT_BR_MONTH_NAMES[monthIdx];
+  if (!monthName) return monthKey;
+  return `${monthName} de ${year}`;
+}
+
+export function validateMonthlySalesGoalDraft(input: {
+  revenueTarget: number;
+  ordersTarget: number;
+}): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (
+    !Number.isFinite(input.revenueTarget) ||
+    input.revenueTarget <= 0
+  ) {
+    errors.push('Informe uma meta de faturamento válida maior que R$ 0,00.');
+  }
+  if (
+    !Number.isFinite(input.ordersTarget) ||
+    input.ordersTarget < 1 ||
+    !Number.isInteger(Math.round(input.ordersTarget))
+  ) {
+    errors.push('Informe uma meta de número de pedidos igual ou maior que 1.');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+export function upsertMonthlySalesGoal(
+  goals: readonly MonthlySalesGoal[],
+  goal: MonthlySalesGoal
+): MonthlySalesGoal[] {
+  const filtered = goals.filter((g) => g.monthKey !== goal.monthKey);
+  return [goal, ...filtered].sort((a, b) =>
+    b.monthKey.localeCompare(a.monthKey)
+  );
+}
+
+export interface MonthlyGoalMetricStatus {
+  realized: number;
+  target: number;
+  progressPct: number;
+  clampedPct: number;
+  remaining: number;
+  surplus: number;
+  achieved: boolean;
+  dailyPaceNeeded: number;
+  statusLabel:
+    | 'Meta atingida'
+    | 'No ritmo'
+    | 'Em andamento'
+    | 'Atenção ao ritmo';
+  statusTone: 'achieved' | 'on_track' | 'in_progress' | 'behind';
+}
+
+export interface MonthlyGoalProgressReport {
+  monthKey: string;
+  monthLabel: string;
+  isConfigured: boolean;
+  goal: MonthlySalesGoal;
+  dayOfMonth: number;
+  daysInMonth: number;
+  daysRemaining: number;
+  expectedMonthPacePct: number;
+  revenue: MonthlyGoalMetricStatus;
+  orders: MonthlyGoalMetricStatus;
+  monthUnitsSold: number;
+  monthAvgTicket: number;
+}
+
+function buildGoalMetricStatus(
+  realized: number,
+  target: number,
+  expectedMonthPacePct: number,
+  remainingDaysIncludingToday: number
+): MonthlyGoalMetricStatus {
+  const safeTarget = Math.max(1, target);
+  const safeRealized = Math.max(0, realized);
+  const progressPct = Math.round((safeRealized / safeTarget) * 1000) / 10;
+  const clampedPct = Math.min(100, Math.max(0, progressPct));
+  const achieved = safeRealized >= safeTarget;
+  const remaining = Math.max(
+    0,
+    Math.round((safeTarget - safeRealized) * 100) / 100
+  );
+  const surplus = Math.max(
+    0,
+    Math.round((safeRealized - safeTarget) * 100) / 100
+  );
+  const dailyPaceNeeded =
+    remaining > 0
+      ? Math.round((remaining / Math.max(1, remainingDaysIncludingToday)) * 100) /
+        100
+      : 0;
+
+  let statusLabel: MonthlyGoalMetricStatus['statusLabel'] = 'Em andamento';
+  let statusTone: MonthlyGoalMetricStatus['statusTone'] = 'in_progress';
+
+  if (achieved) {
+    statusLabel = 'Meta atingida';
+    statusTone = 'achieved';
+  } else if (progressPct >= expectedMonthPacePct * 0.9) {
+    statusLabel = 'No ritmo';
+    statusTone = 'on_track';
+  } else if (progressPct >= expectedMonthPacePct * 0.5) {
+    statusLabel = 'Em andamento';
+    statusTone = 'in_progress';
+  } else {
+    statusLabel = 'Atenção ao ritmo';
+    statusTone = 'behind';
+  }
+
+  return {
+    realized: Math.round(safeRealized * 100) / 100,
+    target: Math.round(safeTarget * 100) / 100,
+    progressPct,
+    clampedPct,
+    remaining,
+    surplus,
+    achieved,
+    dailyPaceNeeded,
+    statusLabel,
+    statusTone,
+  };
+}
+
+export function evaluateMonthlySalesGoalProgress(params: {
+  orders: readonly Order[];
+  goals: readonly MonthlySalesGoal[];
+  now?: Date;
+}): MonthlyGoalProgressReport {
+  const { orders, goals, now = new Date() } = params;
+  const monthKey = getMonthKeyYm(now);
+  const monthLabel = formatPtBrMonthLabel(monthKey);
+  const year = now.getFullYear();
+  const monthIndex = now.getMonth();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const daysRemaining = Math.max(0, daysInMonth - dayOfMonth);
+  const remainingDaysIncludingToday = Math.max(1, daysInMonth - dayOfMonth + 1);
+  const expectedMonthPacePct =
+    Math.round((dayOfMonth / Math.max(1, daysInMonth)) * 1000) / 10;
+
+  const existingGoal = goals.find((g) => g.monthKey === monthKey);
+  const isConfigured = Boolean(existingGoal);
+  const goal: MonthlySalesGoal = existingGoal || {
+    monthKey,
+    revenueTarget: DEFAULT_MONTHLY_REVENUE_GOAL,
+    ordersTarget: DEFAULT_MONTHLY_ORDERS_GOAL,
+    updatedAt: now.toISOString(),
+  };
+
+  let realizedRevenue = 0;
+  let realizedOrdersCount = 0;
+  let monthUnitsSold = 0;
+
+  for (const order of orders) {
+    const dt = parseValidOrderDate(order.createdAt);
+    if (!dt) continue;
+    if (getMonthKeyYm(dt) !== monthKey) continue;
+    realizedOrdersCount += 1;
+    realizedRevenue =
+      Math.round((realizedRevenue + (Number(order.total) || 0)) * 100) / 100;
+    const orderUnits = order.items.reduce(
+      (sum, it) => sum + Math.max(0, Number(it.quantity) || 0),
+      0
+    );
+    monthUnitsSold += orderUnits;
+  }
+
+  const monthAvgTicket =
+    realizedOrdersCount > 0
+      ? Math.round((realizedRevenue / realizedOrdersCount) * 100) / 100
+      : 0;
+
+  return {
+    monthKey,
+    monthLabel,
+    isConfigured,
+    goal,
+    dayOfMonth,
+    daysInMonth,
+    daysRemaining,
+    expectedMonthPacePct,
+    revenue: buildGoalMetricStatus(
+      realizedRevenue,
+      goal.revenueTarget,
+      expectedMonthPacePct,
+      remainingDaysIncludingToday
+    ),
+    orders: buildGoalMetricStatus(
+      realizedOrdersCount,
+      goal.ordersTarget,
+      expectedMonthPacePct,
+      remainingDaysIncludingToday
+    ),
+    monthUnitsSold,
+    monthAvgTicket,
   };
 }
 

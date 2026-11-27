@@ -257,6 +257,15 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
       ? formatStoreWhatsAppDisplay(customerNormalizedWa)
       : activeSystemWaDisplay;
 
+  React.useEffect(() => {
+    if (!previewModalQuote) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewModalQuote(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewModalQuote]);
+
   const parsedDiscountInput = Math.max(
     0,
     Number(discountInput.replace(',', '.')) || 0
@@ -1629,6 +1638,7 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
                         <ProductImageWithFallback
                           src={customImageUrl}
                           alt="Prévia do produto"
+                          variant="thumbnail"
                           className="w-full h-full object-cover"
                         />
                       </div>
@@ -1766,6 +1776,7 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
                             <ProductImageWithFallback
                               src={entry.imageUrl}
                               alt={entry.title}
+                              variant="thumbnail"
                               className="w-full h-full object-cover"
                             />
                           ) : (
@@ -1884,6 +1895,7 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
                                   <ProductImageWithFallback
                                     src={item.imageUrl}
                                     alt={item.title}
+                                    variant="thumbnail"
                                     className="w-full h-full object-cover"
                                   />
                                 ) : (
@@ -2837,17 +2849,17 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
           onClick={(e) => {
             if (e.target === e.currentTarget) setPreviewModalQuote(null);
           }}
-          className="fixed inset-0 z-50 bg-zinc-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          className="fixed inset-0 z-50 bg-zinc-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
         >
-          <div className="bg-white rounded-2xl max-w-xl w-full border border-zinc-200 shadow-2xl overflow-hidden my-auto">
-            <div className="bg-zinc-950 text-white px-5 py-4 flex items-center justify-between border-b-4 border-[#FFBE00]">
-              <div>
-                <span className="text-[10px] font-mono uppercase font-extrabold text-[#FFBE00] block">
+          <div className="bg-white rounded-2xl max-w-xl w-full max-h-[90dvh] flex flex-col border border-zinc-200 shadow-2xl overflow-hidden my-auto">
+            <div className="shrink-0 bg-zinc-950 text-white px-4 sm:px-5 py-3.5 sm:py-4 flex items-center justify-between gap-2 border-b-4 border-[#FFBE00]">
+              <div className="min-w-0">
+                <span className="text-[10px] font-mono uppercase font-extrabold text-[#FFBE00] block truncate">
                   {previewModalQuote.hidePrices
                     ? `ORÇAMENTO SOB CONSULTA · ${settings.storeName}`
                     : `ORÇAMENTO COMERCIAL · ${settings.storeName}`}
                 </span>
-                <h3 className="font-mono text-lg font-extrabold">
+                <h3 className="font-mono text-base sm:text-lg font-extrabold truncate">
                   {previewModalQuote.id} · {previewModalQuote.customerName}
                 </h3>
               </div>
@@ -2855,12 +2867,12 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
                 type="button"
                 onClick={() => setPreviewModalQuote(null)}
                 aria-label="Fechar visualização"
-                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer"
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 space-y-4 text-xs">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-[#FAFAFA] border border-zinc-200">
                 <div>
                   <span className="text-zinc-500 block">Vendedor</span>
@@ -2895,6 +2907,7 @@ export const AdminSellerArea: React.FC<AdminSellerAreaProps> = ({
                         <ProductImageWithFallback
                           src={item.imageUrl || ''}
                           alt={item.title}
+                          variant="thumbnail"
                           className="w-full h-full object-cover"
                         />
                       </div>

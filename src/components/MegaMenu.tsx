@@ -19,53 +19,64 @@ export const MegaMenu: React.FC<MegaMenuProps> = ({
   onSelectCategory,
   onSelectProduct,
 }) => {
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const sortedCategories = [...categories].sort((a, b) => a.order - b.order);
 
   return (
     <div
-      role="region"
+      role="dialog"
+      aria-modal="true"
       aria-label="MegaMenu de Produtos Quimiprol e Limper MT"
-      className="fixed inset-x-0 top-[7.5rem] z-40 bg-zinc-900/35 backdrop-blur-[2px] no-print"
+      className="fixed inset-0 z-50 bg-zinc-900/45 backdrop-blur-[2px] flex items-start justify-center p-2.5 sm:p-4 md:pt-16 lg:pt-20 no-print"
       onClick={onClose}
     >
       <div
-        className="max-w-[1280px] mx-auto bg-white border-x border-b border-zinc-200 rounded-b-2xl shadow-2xl p-5 sm:p-7 max-h-[82vh] overflow-y-auto"
+        className="w-full max-w-[1280px] bg-white border border-zinc-200 rounded-2xl shadow-2xl flex flex-col max-h-[calc(100dvh-1.25rem)] sm:max-h-[calc(100dvh-2rem)] md:max-h-[82dvh] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Header Strip inside MegaMenu */}
-        <div className="flex items-center justify-between gap-4 pb-4 mb-5 border-b border-zinc-200">
-          <div className="flex items-center gap-2.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#E3262E]" />
-            <span className="font-display text-sm sm:text-base font-extrabold text-zinc-900 uppercase tracking-wide">
-              Linhas de Produtos de Limpeza Profissional & Doméstica (Base Quimiprol)
+        {/* Sticky Top Header Strip inside MegaMenu */}
+        <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3.5 sm:px-7 sm:py-5 border-b border-zinc-200 bg-white">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#E3262E] shrink-0" />
+            <span className="font-display text-xs sm:text-base font-extrabold text-zinc-900 uppercase tracking-wide leading-snug">
+              Linhas de Produtos Limper MT · Quimiprol
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               type="button"
               onClick={() => {
                 onSelectCategory(null);
                 onClose();
               }}
-              className="text-xs font-extrabold text-[#E3262E] hover:underline cursor-pointer"
+              className="text-[11px] sm:text-xs font-extrabold text-[#E3262E] hover:underline cursor-pointer whitespace-nowrap"
             >
-              Ver Todos os Produtos ({products.filter((p) => p.status !== 'inactive').length})
+              Ver Todos ({products.filter((p) => p.status !== 'inactive').length})
             </button>
             <button
               type="button"
               onClick={onClose}
               aria-label="Fechar menu de produtos"
-              className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+              className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer shrink-0"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* 4-Column Quimiprol MegaMenu Grid (Matches Reference Screenshot) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        {/* Scrollable 4-Column Quimiprol MegaMenu Grid */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-7">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
           {sortedCategories.map((cat) => {
             const catProducts = products.filter(
               (p) => p.categoryId === cat.id && p.status !== 'inactive'
@@ -140,6 +151,7 @@ export const MegaMenu: React.FC<MegaMenuProps> = ({
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

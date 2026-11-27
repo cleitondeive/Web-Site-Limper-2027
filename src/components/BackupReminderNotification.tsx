@@ -161,23 +161,23 @@ export const BackupReminderNotification: React.FC<BackupReminderNotificationProp
       id="admin-backup-reminder-toast"
       role="status"
       aria-live="polite"
-      className="fixed bottom-5 right-5 z-40 w-[calc(100%-2rem)] max-w-sm bg-zinc-950 text-white rounded-2xl border-2 border-[#FFBE00] shadow-2xl p-4 space-y-3 no-print"
+      className="fixed bottom-3 right-3 left-3 sm:left-auto sm:bottom-5 sm:right-5 z-40 sm:w-full max-w-sm bg-zinc-950 text-white rounded-2xl border-2 border-[#FFBE00] shadow-2xl p-3 sm:p-4 space-y-2.5 sm:space-y-3 no-print"
     >
-      <div className="flex items-start justify-between gap-2.5">
+      <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-[#FFBE00] text-zinc-950 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#FFBE00] text-zinc-950 flex items-center justify-center shrink-0">
             <BellRing className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <span className="text-[10px] font-mono font-extrabold uppercase tracking-wider text-[#FFBE00] block">
+            <span className="text-[9.5px] sm:text-[10px] font-mono font-extrabold uppercase tracking-wider text-[#FFBE00] block truncate">
               {isPreview
-                ? 'PRÉ-VISUALIZAÇÃO · LEMBRETE DE BACKUP'
+                ? 'PRÉ-VISUALIZAÇÃO · BACKUP'
                 : `LEMBRETE DE BACKUP · +${evaluation.thresholdHours}H`}
             </span>
-            <p className="text-xs font-extrabold text-white leading-snug mt-0.5">
+            <p className="text-[11.5px] sm:text-xs font-extrabold text-white leading-snug mt-0.5">
               {headline}
             </p>
-            <p className="text-[11px] text-zinc-300 leading-relaxed mt-1">
+            <p className="hidden sm:block text-[11px] text-zinc-300 leading-relaxed mt-1">
               {formattedLastDate
                 ? `Último ponto salvo em ${formattedLastDate}. Faça um backup rápido para garantir a integridade dos dados.`
                 : `Mantenha seus dados protegidos gerando um snapshot completo agora.`}
@@ -194,26 +194,26 @@ export const BackupReminderNotification: React.FC<BackupReminderNotificationProp
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
         <button
           type="button"
           onClick={onBackupNow}
-          className="flex-1 py-2 px-3 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 text-xs font-extrabold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+          className="flex-1 min-w-[115px] py-2 px-2 min-[360px]:px-2.5 sm:px-3 rounded-xl bg-[#FFBE00] hover:bg-[#F59E0B] text-zinc-950 text-[11px] sm:text-xs font-extrabold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
         >
-          <Database className="w-3.5 h-3.5" />
-          <span>Fazer Backup Agora</span>
+          <Database className="w-3.5 h-3.5 shrink-0" />
+          <span>Backup Agora</span>
         </button>
         <button
           type="button"
           onClick={onOpenBackupVault}
-          className="py-2 px-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-bold cursor-pointer transition-colors"
+          className="py-2 px-2 min-[360px]:px-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-[11px] sm:text-xs font-bold cursor-pointer transition-colors whitespace-nowrap"
         >
           Configurar
         </button>
         <button
           type="button"
           onClick={onSnooze}
-          className="py-2 px-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs font-bold cursor-pointer transition-colors"
+          className="py-2 px-2 min-[360px]:px-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 text-[11px] sm:text-xs font-bold cursor-pointer transition-colors whitespace-nowrap"
         >
           Adiar 4h
         </button>

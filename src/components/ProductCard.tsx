@@ -85,6 +85,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               src={product.imageUrl}
               alt={product.title}
               volumeLabel={product.volumeLabel}
+              variant="productCard"
               className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-103"
             />
           </button>
@@ -399,6 +400,15 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onAdd,
   onUpdateQuantity,
 }) => {
+  React.useEffect(() => {
+    if (!product) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [product, onClose]);
+
   if (!product) return null;
 
   const priceVisible = isProductPriceVisible(product, settings);
@@ -413,19 +423,23 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-product-title"
-      className="fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 bg-zinc-900/55 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
     >
-      <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden border border-zinc-200 shadow-2xl grid grid-cols-1 md:grid-cols-2">
-        <div className="relative aspect-4/3 md:aspect-auto bg-[#F8F9FA] min-h-[240px]">
+      <div className="relative bg-white rounded-2xl max-w-2xl w-full max-h-[90dvh] overflow-y-auto border border-zinc-200 shadow-2xl grid grid-cols-1 md:grid-cols-2">
+        <div className="relative h-48 sm:h-56 md:h-auto bg-[#F8F9FA] md:min-h-[260px]">
           <ProductImageWithFallback
             src={product.imageUrl}
             alt={product.title}
             volumeLabel={product.volumeLabel}
+            variant="productDetail"
             className="w-full h-full object-cover"
           />
           {priceVisible && discountPct > 0 && (
             <div
-              className="absolute top-3 left-3 w-12 h-12 rounded-full font-mono font-extrabold text-xs leading-tight flex flex-col items-center justify-center shadow-xs border border-white"
+              className="absolute top-3 left-3 w-11 h-11 sm:w-12 sm:h-12 rounded-full font-mono font-extrabold text-xs leading-tight flex flex-col items-center justify-center shadow-xs border border-white"
               style={{
                 backgroundColor: promoBadgeStyle.backgroundColor,
                 color: promoBadgeStyle.color,
@@ -435,12 +449,20 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               <span className="text-[9px] font-black">OFF</span>
             </div>
           )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar detalhes do produto"
+            className="md:hidden absolute top-2.5 right-2.5 w-9 h-9 rounded-full bg-white/95 border border-zinc-200 shadow-md text-zinc-700 hover:text-zinc-950 flex items-center justify-center cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <div className="p-6 flex flex-col justify-between">
+        <div className="p-4 sm:p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between gap-2 mb-2">
-              <div className="text-xs text-zinc-500 font-medium">
+              <div className="text-xs text-zinc-500 font-medium min-w-0 truncate">
                 <span className="text-[#E3262E] font-bold">{category?.name || 'Linha Quimiprol'}</span>
                 <span aria-hidden="true"> · </span>
                 <span className="font-mono">{product.sku}</span>
@@ -449,7 +471,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 type="button"
                 onClick={onClose}
                 aria-label="Fechar detalhes do produto"
-                className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 cursor-pointer"
+                className="hidden md:inline-flex p-1.5 rounded-lg text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
