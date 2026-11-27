@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Limper MT">
+  <defs>
+    <linearGradient id="limperBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFCA28"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#limperBg)"/>
+  <rect x="34" y="34" width="444" height="444" rx="84" fill="none" stroke="#181A20" stroke-opacity="0.12" stroke-width="8"/>
+  <!-- Stylized L-drop emblem -->
+  <g transform="translate(88, 92)">
+    <rect x="0" y="0" width="336" height="224" rx="44" fill="#FFFFFF"/>
+    <path d="M56 164 L84 62 L120 62 L100 134 L176 134 L168 164 Z" fill="#E3262E"/>
+    <circle cx="232" cy="113" r="46" fill="#E3262E" fill-opacity="0.12"/>
+    <path d="M232 72 C232 72 264 108 264 128 C264 146 250 160 232 160 C214 160 200 146 200 128 C200 108 232 72 232 72 Z" fill="#E3262E"/>
+    <circle cx="222" cy="130" r="8" fill="#FFFFFF" fill-opacity="0.75"/>
+  </g>
+  <!-- Brand bar -->
+  <rect x="88" y="340" width="336" height="82" rx="26" fill="#181A20"/>
+  <text x="256" y="395" text-anchor="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-weight="900" font-size="44" letter-spacing="3" fill="#FFBE00">LIMPER MT</text>
+</svg>

@@ -98,6 +98,7 @@ import {
   OrderConfirmationModal,
 } from './components/CartCheckoutDrawer';
 import { OrdersHistoryView } from './components/OrdersHistoryModal';
+import { OfflineIndicator } from './components/PWAControls';
 import { AdminDashboard } from './components/AdminDashboard';
 import {
   CepLocationModal,
@@ -2651,6 +2652,7 @@ export default function App() {
           </div>
         </footer>
       )}
+      <OfflineIndicator />
     </div>
   );
 }

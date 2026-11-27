@@ -366,7 +366,20 @@ async function startServer(): Promise<void> {
         immutable: true,
       })
     );
-    app.use(express.static(distDir, { index: false }));
+    app.use(
+      express.static(distDir, {
+        index: false,
+        setHeaders(res, filePath) {
+          if (
+            filePath.endsWith('sw.js') ||
+            filePath.endsWith('registerSW.js') ||
+            filePath.endsWith('manifest.webmanifest')
+          ) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          }
+        },
+      })
+    );
 
     app.get('*', (_req: Request, res: Response) => {
       if (fs.existsSync(indexHtmlPath)) {

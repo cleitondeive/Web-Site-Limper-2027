@@ -32,6 +32,7 @@ import {
 } from '../utils/commerce';
 import { LIMPER_LOGO_URL } from '../data/initialCatalog';
 import { ProductImageWithFallback } from './CategoryIcon';
+import { PWAInstallButton } from './PWAControls';
 
 export type ActiveView = 'store' | 'orders' | 'account' | 'admin';
 
@@ -699,21 +700,24 @@ export const Header: React.FC<HeaderProps> = ({
             </a>
           </div>
 
-          {/* Right Pill CTA ("Exibir descontos" like Drogasil) */}
-          <button
-            type="button"
-            onClick={onSelectOffers}
-            className={`px-3 py-1 rounded-full text-[11px] sm:text-xs font-extrabold transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs inline-flex items-center gap-1.5 ${
-              onlyOffers
-                ? 'bg-[#FFBE00] text-zinc-950'
-                : 'bg-[#BA1826] hover:bg-[#9E1420] text-white'
-            }`}
-          >
-            <Percent className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
-            <span>
-              {onlyOffers ? 'Exibindo descontos ✓' : 'Exibir descontos Limper'}
-            </span>
-          </button>
+          {/* Right Actions: PWA Install + Offers CTA */}
+          <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton variant="subnav" />
+            <button
+              type="button"
+              onClick={onSelectOffers}
+              className={`px-3 py-1 rounded-full text-[11px] sm:text-xs font-extrabold transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs inline-flex items-center gap-1.5 ${
+                onlyOffers
+                  ? 'bg-[#FFBE00] text-zinc-950'
+                  : 'bg-[#BA1826] hover:bg-[#9E1420] text-white'
+              }`}
+            >
+              <Percent className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+              <span>
+                {onlyOffers ? 'Exibindo descontos ✓' : 'Exibir descontos Limper'}
+              </span>
+            </button>
+          </div>
         </div>
       </nav>
     </>
